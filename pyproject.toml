@@ -12,6 +12,7 @@ dependencies = [
     "psycopg[binary]>=3.2",   # Postgres driver. [binary] ships prebuilt wheels.
     "pgvector>=0.4",          # Registers the `vector` type with psycopg.
     "python-dotenv>=1.0",     # Loads .env so secrets stay out of source.
+    "pyyaml>=6.0",            # Tenant/policy config and markdown frontmatter.
 ]
 
 [dependency-groups]

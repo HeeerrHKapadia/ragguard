@@ -1,0 +1,111 @@
+# Tenant definitions: corpus location, sensitivity policy, and org structure.
+#
+# This file is the security model. Everything the system later enforces —
+# and everything the eval harness later checks for leaks — traces back to
+# what is written here. Keep it readable; a policy nobody can read is a
+# policy nobody can audit.
+#
+# Sensitivity tiers, least to most restricted:
+#   public        anyone, including people outside the company
+#   internal      any employee
+#   confidential  a department that owns the material
+#   restricted    executives only
+#
+# tier_rules match on the document's path relative to `root`, first match
+# wins, falling back to `default_tier`. Deriving tiers from the directory
+# the document already lives in keeps the policy defensible: these are the
+# boundaries the real company drew, not ones invented for the demo.
+
+tenants:
+  - slug: gitlab
+    name: GitLab
+    root: data/raw/gitlab/content/handbook
+    default_tier: internal
+    tier_rules:
+      - { prefix: board-meetings, tier: restricted }
+      - { prefix: acquisitions,   tier: restricted }
+      - { prefix: ceo,            tier: restricted }
+      - { prefix: leadership,     tier: restricted }
+      - { prefix: eba,            tier: restricted }
+      - { prefix: finance,        tier: confidential }
+      - { prefix: legal,          tier: confidential }
+      - { prefix: hiring,         tier: confidential }
+      - { prefix: people-group,   tier: confidential }
+      - { prefix: entity,         tier: confidential }
+      - { prefix: company,        tier: public }
+      - { prefix: about,          tier: public }
+      - { prefix: communication,  tier: public }
+    groups:
+      - { slug: engineering,  name: Engineering,  clearance: internal }
+      - { slug: finance-team, name: Finance,      clearance: internal, elevated: [finance] }
+      - { slug: people-ops,   name: People Group, clearance: internal, elevated: [people-group, hiring] }
+      - { slug: exec,         name: Executive,    clearance: restricted }
+    users:
+      - { email: newhire@gitlab.test,  name: Priya Nair,    title: New Hire,          groups: [] }
+      - { email: eng@gitlab.test,      name: Marco Silva,   title: Staff Engineer,    groups: [engineering] }
+      - { email: finance@gitlab.test,  name: Dana Okoye,    title: Finance Analyst,   groups: [finance-team] }
+      - { email: exec@gitlab.test,     name: Lena Hoffmann, title: VP Operations,     groups: [exec] }
+
+  - slug: sourcegraph
+    name: Sourcegraph
+    root: data/raw/sourcegraph/content
+    default_tier: internal
+    tier_rules:
+      - { prefix: strategy-goals,                 tier: restricted }
+      - { prefix: benefits-pay-perks,             tier: confidential }
+      - { prefix: departments/people-talent,      tier: confidential }
+      - { prefix: departments/finance,            tier: confidential }
+      - { prefix: departments/legal,              tier: confidential }
+      - { prefix: team,                           tier: public }
+    groups:
+      - { slug: engineering,  name: Engineering,   clearance: internal }
+      - { slug: people-team,  name: People Talent, clearance: internal, elevated: [departments/people-talent, benefits-pay-perks] }
+      - { slug: exec,         name: Executive,     clearance: restricted }
+    users:
+      - { email: newhire@sourcegraph.test, name: Tom Becker,   title: New Hire,       groups: [] }
+      - { email: eng@sourcegraph.test,     name: Aisha Rahman, title: Engineer,       groups: [engineering] }
+      - { email: people@sourcegraph.test,  name: Jo Martins,   title: People Partner, groups: [people-team] }
+      - { email: exec@sourcegraph.test,    name: Sam Whitfield, title: Head of Eng,   groups: [exec] }
+
+  - slug: posthog
+    name: PostHog
+    root: data/raw/posthog/contents/handbook
+    default_tier: internal
+    tier_rules:
+      - { prefix: exec,                tier: restricted }
+      - { prefix: people/compensation, tier: restricted }
+      - { prefix: people/grievances,   tier: restricted }
+      - { prefix: finance,             tier: confidential }
+      - { prefix: people,              tier: confidential }
+      - { prefix: getting-started,  tier: public }
+      - { prefix: company,          tier: public }
+      - { prefix: values,           tier: public }
+      - { prefix: story,            tier: public }
+    groups:
+      - { slug: engineering, name: Engineering, clearance: internal }
+      - { slug: people-team, name: People,      clearance: internal, elevated: [people] }
+      - { slug: exec,        name: Executive,   clearance: restricted }
+    users:
+      - { email: newhire@posthog.test, name: Ravi Menon,   title: New Hire,      groups: [] }
+      - { email: eng@posthog.test,     name: Elena Petrova, title: Engineer,     groups: [engineering] }
+      - { email: people@posthog.test,  name: Chris Adeyemi, title: People Ops,   groups: [people-team] }
+      - { email: exec@posthog.test,    name: Nina Costa,    title: Cofounder,    groups: [exec] }
+
+# Sampling keeps tenants comparable in size. Without it GitLab contributes
+# 4139 documents and PostHog 313, and any cross-tenant retrieval comparison
+# would really just be measuring corpus size.
+#
+# Sampling is deterministic — sorted, then evenly spaced picks — so re-running
+# produces the same corpus and eval numbers stay comparable across runs.
+#
+# `never_sample_tiers` is the important line. Restricted documents are the
+# entire basis of the leak tests, and public handbooks contain very few of
+# them (GitLab publishes exactly one board-meeting document, for obvious
+# reasons). Sampling that tier down would quietly weaken every security
+# assertion built on top of it, so it is kept whole and the bulk internal
+# tier absorbs the trimming instead.
+sampling:
+  max_docs_per_section: 25
+  max_docs_per_tenant: 300
+  never_sample_tiers: [restricted]
+  min_chars: 400

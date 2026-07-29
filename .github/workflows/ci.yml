@@ -29,6 +29,12 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
+      # The access policy is pure functions over plain data, so it tests
+      # without a database or the corpus. It also runs first: if the policy
+      # is wrong, nothing downstream is worth checking.
+      - name: Policy tests
+        run: uv run pytest -q
+
       - name: Start database
         run: |
           cp .env.example .env

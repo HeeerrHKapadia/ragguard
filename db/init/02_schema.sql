@@ -40,6 +40,18 @@ CREATE TABLE IF NOT EXISTS groups (
     tenant_id  uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     slug       text NOT NULL,
     name       text NOT NULL,
+
+    -- Highest sensitivity tier this group can read by default.
+    clearance  text NOT NULL DEFAULT 'internal'
+               CHECK (clearance IN ('public', 'internal', 'confidential', 'restricted')),
+
+    -- Sections where this group is elevated beyond its clearance. Finance
+    -- sits at 'internal' clearance generally, but reads confidential material
+    -- inside `finance/`. Real access is rarely a single global level, and
+    -- modelling it as one is how systems end up either over-blocking or
+    -- over-sharing.
+    elevated_sections text[] NOT NULL DEFAULT '{}',
+
     UNIQUE (tenant_id, slug)
 );
 
@@ -58,6 +70,12 @@ CREATE TABLE IF NOT EXISTS documents (
     tenant_id    uuid        NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     source_uri   text        NOT NULL,
     title        text        NOT NULL,
+
+    -- The handbook department this document came from. Drives both the
+    -- sensitivity tier and the per-section elevation checks above, so it
+    -- has to be stored rather than re-derived from the path at query time.
+    section      text        NOT NULL DEFAULT 'root',
+
     -- A CHECK constraint rather than a Postgres ENUM: adding a tier later
     -- is a one-line ALTER instead of an enum migration dance.
     sensitivity  text        NOT NULL DEFAULT 'internal'
@@ -103,6 +121,7 @@ CREATE INDEX IF NOT EXISTS chunks_document_idx    ON chunks (document_id);
 CREATE INDEX IF NOT EXISTS chunks_tsv_idx         ON chunks USING GIN (tsv);
 CREATE INDEX IF NOT EXISTS documents_tenant_idx   ON documents (tenant_id);
 CREATE INDEX IF NOT EXISTS documents_sens_idx     ON documents (sensitivity);
+CREATE INDEX IF NOT EXISTS documents_section_idx  ON documents (tenant_id, section);
 
 -- DELIBERATELY NOT CREATED YET: the HNSW index on chunks.embedding.
 --
