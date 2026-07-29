@@ -1,0 +1,25 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Note: uv.lock is deliberately NOT ignored. This is an application, not a
+# library — committing the lockfile is what makes builds reproducible.
+
+# Corpus data (large, re-downloadable — Phase 0b)
+data/raw/
+data/processed/
+
+# Eval output
+eval/results/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

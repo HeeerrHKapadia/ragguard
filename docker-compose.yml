@@ -1,0 +1,41 @@
+# Phase 0a: just Postgres + pgvector.
+# Qdrant, OpenFGA and Langfuse get added in later phases, when a failing
+# metric actually demands them. Don't add services you can't yet justify.
+
+name: ragguard
+
+services:
+  postgres:
+    # Official pgvector image = Postgres 17 with the `vector` extension
+    # precompiled. Building it yourself is a rite of passage you can skip.
+    image: pgvector/pgvector:pg17
+    container_name: ragguard-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ragguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragguard_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-ragguard}
+    ports:
+      # Host 5433, not 5432 — so this never collides with a Postgres you
+      # might install natively later. Container-internal is still 5432.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      # NAMED VOLUME for data, not a bind mount to a Windows folder.
+      # Bind-mounting the Postgres data dir on Windows causes permission
+      # and fsync problems. Config files below are bind-mounted read-only,
+      # which is fine because they're small and never written to.
+      - pgdata:/var/lib/postgresql/data
+      # Everything in here runs ONCE, in filename order, on first startup
+      # of an empty volume. `docker compose down -v` wipes and re-runs it.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # Compose marks the service healthy only when Postgres actually
+      # accepts connections — "container started" != "database ready".
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ragguard} -d ${POSTGRES_DB:-ragguard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:

@@ -1,0 +1,38 @@
+# CI runs the exact same path a developer runs locally: lint, bring up the
+# real Postgres+pgvector container via docker compose, run the smoke test.
+# No mocked database — if the schema or an operator breaks, CI goes red.
+#
+# Later phases extend this with eval gates: leak rate must be exactly 0,
+# and retrieval metrics must not regress, or the build fails.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Start database
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait
+
+      - name: Smoke test (real database, no mocks)
+        run: uv run python scripts/smoke_test.py
