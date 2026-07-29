@@ -54,18 +54,37 @@ And the graph layer adds four failure modes that vector RAG doesn't have:
 
 ## Results
 
-<!-- Filled in from Phase 1 onward. This table is the point of the project. -->
+884 graded cases from 220 distinct queries, scored against 639 documents and
+12 personas. The reference retrievers are not systems anyone would ship — they
+exist to calibrate the harness, and they bracket the range every real result
+must fall inside.
 
-| Stage | Leak rate | Over-block rate | Recall parity | Faithfulness | p95 latency |
-| ----- | --------- | --------------- | ------------- | ------------ | ----------- |
-| Phase 1 — naive baseline | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+| Retriever | Leak rate | Recall | vs ceiling | Recall parity |
+| --------- | --------: | -----: | ---------: | ------------: |
+| `null` — returns nothing | 0.0% | 0.0% | 0% | — |
+| `leaky` — no filtering at all | **82.5%** | 95.2% | 100% | 1.00 |
+| `oracle` — perfect and permitted | 0.0% | 95.3% | 100% | 1.00 |
+| Phase 1 — naive baseline | _pending_ | _pending_ | _pending_ | _pending_ |
 
-**Leak rate** — authorized-to-see violations. Target: exactly 0, enforced in CI.
-**Over-block rate** — content wrongly withheld. A system that answers nothing
-never leaks and is worthless.
-**Recall parity** — retrieval quality for a low-privilege persona divided by
-that of a high-privilege persona, on questions *both* are entitled to answer.
-Target ≈ 1.0. This is the metric that catches silent post-filter collapse.
+**Leak rate** — fraction of cases returning any document the persona may not
+read. Case-level, not document-level: one forbidden document among ninety-nine
+correct ones is a breach, and averaging would report a soothing 1% and bury it.
+Target is exactly 0, enforced in CI.
+
+**Recall vs ceiling** — recall as a fraction of what is achievable at this `k`.
+A global query with 25 relevant documents caps out at 40% recall when `k=10`,
+so raw recall punishes a retriever for a cutoff it did not choose. This is the
+number to compare retrievers on.
+
+**Recall parity** — lowest-privilege recall divided by highest-privilege
+recall, per tenant, on questions both are entitled to answer. Near 1.0 means
+privilege does not degrade quality; below ~0.8 means it does. This is the
+metric that catches silent post-filter collapse, and the oracle proves 1.00 is
+reachable — so any later drop is a real regression, not a law of nature.
+
+**Over-block rate** — entitled material not returned. Honest caveat: this
+conflates filtering with ordinary ranking misses. Phase 2 separates them by
+running the identical retriever with and without filtering.
 
 ## Stack
 
@@ -115,6 +134,16 @@ uv run python scripts/seed.py
 
 ```bash
 uv run python scripts/access_matrix.py
+```
+
+Then build the golden dataset and calibrate the eval harness:
+
+```bash
+uv run python scripts/build_goldens.py
+```
+
+```bash
+uv run python scripts/evaluate.py
 ```
 
 ## The corpus
@@ -190,14 +219,24 @@ src/ragguard/
   db.py              Connection helper with pgvector type registration
   corpus.py          Filesystem to documents: frontmatter, tiers, sampling
   access.py          Reference implementation of the policy
+  eval/
+    dataset.py       Golden cases: local vs global query classes
+    metrics.py       Leak rate, recall vs ceiling, recall parity
+    retriever.py     Retriever protocol + three calibration retrievers
+    runner.py        Corpus + personas + cases -> scored report
 scripts/
   smoke_test.py      Phase 0a deliverable
   fetch_corpus.py    Sparse-clone the three handbooks
   corpus_report.py   Dry-run ingestion, check tier distribution
   seed.py            Config to database rows, idempotent
   access_matrix.py   Who can see what — Phase 0b deliverable
+  build_goldens.py   Generate eval/goldens.jsonl (committed, diffable)
+  evaluate.py        Score retrievers — Phase 0c deliverable
+eval/
+  goldens.jsonl      884 graded cases. Committed on purpose.
 tests/
   test_access.py     The policy is the part that must not silently change
+  test_metrics.py    A wrong scorer misleads every result built on it
 ```
 
 ## Design notes
@@ -221,6 +260,21 @@ enforcement into SQL filters and an authorization service for speed. The only
 way to know those fast paths are correct is to keep a reference implementation
 that is obviously correct, and diff against it. When the eval reports a leak,
 this is the oracle that says what should have happened.
+
+**The eval harness is calibrated against retrievers with known-correct scores.**
+A scorer with an inverted comparison reports encouraging numbers forever and
+nobody notices. So before grading anything real, the harness has to prove it
+reports 82.5% leakage for a retriever that ignores permissions and a clean
+sweep for one that cannot fail. Both checks run in CI.
+
+Writing those calibration retrievers immediately found two bugs I had written:
+a "leaky" retriever that was accidentally safe most of the time, and a recall
+metric that punished retrievers for the `k` cutoff rather than for missing
+documents. Neither would have been visible from a real retriever's numbers.
+
+**The golden dataset is committed and CI verifies it regenerates byte for
+byte.** If generation drifts, results from different phases stop being
+comparable and the whole table becomes fiction.
 
 **Tenant isolation is checked before anything else, and nothing overrides it.**
 It's tempting to model "exec" as simply high-ranking and compare clearance
