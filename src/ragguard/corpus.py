@@ -100,8 +100,16 @@ def discover(tenant: dict, min_chars: int) -> list[Document]:
     rules = tenant.get("tier_rules", [])
     default_tier = tenant.get("default_tier", "internal")
 
+    # Sort on the POSIX relative path string, not on Path objects.
+    #
+    # Path comparison is platform-dependent: PureWindowsPath compares
+    # case-insensitively while PurePosixPath is case-sensitive, so
+    # `README.md` and `about.md` order differently on Windows and Linux.
+    # Sampling picks evenly-spaced items from this list, so a different
+    # order means a different corpus — reproducible on one machine and
+    # not the other, which is the worst kind of reproducible.
     docs: list[Document] = []
-    for path in sorted(root.rglob("*.md")):
+    for path in sorted(root.rglob("*.md"), key=lambda p: p.relative_to(root).as_posix()):
         raw = path.read_text(encoding="utf-8", errors="replace")
         meta, body = strip_frontmatter(raw)
         body = body.strip()
