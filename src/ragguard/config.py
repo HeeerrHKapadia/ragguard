@@ -28,6 +28,7 @@ class Settings:
     pg_db: str
     pg_host: str
     pg_port: int
+    embedding_model: str
     embedding_dim: int
     connect_timeout: int = 5
 
@@ -61,7 +62,8 @@ def load_settings() -> Settings:
         pg_db=os.getenv("POSTGRES_DB", "ragguard"),
         pg_host=os.getenv("POSTGRES_HOST", "localhost"),
         pg_port=int(os.getenv("POSTGRES_PORT", "5433")),
-        embedding_dim=int(os.getenv("EMBEDDING_DIM", "1024")),
+        embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
+        embedding_dim=int(os.getenv("EMBEDDING_DIM", "384")),
     )
 
 

@@ -100,10 +100,16 @@ CREATE TABLE IF NOT EXISTS chunks (
     text        text NOT NULL,
     token_count int,
 
-    -- 1024 dims: matches BGE-M3 and voyage-3, and most modern models can
-    -- be truncated to 1024 via Matryoshka. NOTE: pgvector fixes this at
-    -- DDL time, so changing embedding model later may mean a migration.
-    embedding   vector(1024),
+    -- 384 dims: BAAI/bge-small-en-v1.5, which fastembed serves via ONNX.
+    -- Chosen for speed and a 133MB download so CI can run the real pipeline
+    -- rather than a mocked one. Vectors arrive pre-normalized, so cosine
+    -- distance reduces to a dot product.
+    --
+    -- pgvector fixes this width at table-creation time, so switching model
+    -- means recreating the volume. Phase 3 benchmarks larger models and has
+    -- to pay that cost deliberately — which is the point, since the upgrade
+    -- then comes with a measured quality delta instead of an assumption.
+    embedding   vector(384),
 
     -- Generated column: Postgres keeps the full-text vector in sync
     -- automatically. This is the BM25-ish half of hybrid search in Phase 3.
