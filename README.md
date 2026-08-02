@@ -98,6 +98,47 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Phase 3 — the frozen control group
+
+Everything the knowledge graph must beat. Full 884-case set unless noted.
+
+| Retriever | vs ceiling | Local | Global | Throughput |
+| --------- | ---------: | -----: | -----: | ---------: |
+| dense pre-filter | **86.8%** | **94.6%** | 32.9% | 243 q/s |
+| + lexical fusion (RRF, weight 0.25) | 84.3% | 91.1% | 35.0% | 104 q/s |
+| + cross-encoder rerank *(200-case sample)* | 85.6% | 91.3% | **42.5%** | 0.7 q/s |
+
+**Two independent techniques, one identical pattern.** Lexical fusion and
+cross-encoder reranking were added separately, and both improved
+cross-document questions while damaging point lookups:
+
+| Technique | Local | Global |
+| --------- | ----: | -----: |
+| Lexical fusion | −3.5% | +2.0% |
+| Cross-encoder rerank | −3.2% | **+10.4%** |
+
+That convergence is the finding. A point lookup has one right answer and the
+dense ranking usually already found it, so anything that reshuffles the top
+results mostly introduces noise. A cross-document question needs several
+documents that share a term or a theme rather than a single best match, and
+both techniques are good at exactly that.
+
+**There is no single configuration to freeze, and that is the result.**
+Optimising for the average would give up 3 points on the queries dense search
+already handles well in exchange for gains on queries it handles badly — or
+the reverse. Routing by query class is not a refinement here; it is what the
+measurements say to do. Phase 5 reaches the same conclusion about the
+knowledge graph from a completely different direction.
+
+**Reranking costs 174× throughput** — 122 down to 0.7 queries per second on
+CPU, because a cross-encoder runs a forward pass per candidate and can
+precompute nothing. A +10.4% gain on global queries is worth that on a
+routed path and absurd on every query.
+
+**The bar for the knowledge graph is now 42.5% on global queries**, not the
+25.0% Phase 1 produced. Ordinary techniques closed most of that gap already,
+which is exactly the comparison a graph is usually never measured against.
+
 ### What Phase 2 found
 
 **Both filter placements reach a zero leak rate. They are not equivalent.**

@@ -31,6 +31,7 @@ from ragguard.retrieval.dense import (
     PostFilterRetriever,
     PreFilterRetriever,
 )
+from ragguard.retrieval.hybrid import HybridRetriever
 
 GOLDENS = PROJECT_ROOT / "eval" / "goldens.jsonl"
 
@@ -134,7 +135,7 @@ def main() -> int:
 
         print("\n" + "=" * 52)
         reports = {}
-        for cls in (DenseRetriever, PostFilterRetriever, PreFilterRetriever):
+        for cls in (DenseRetriever, PostFilterRetriever, PreFilterRetriever, HybridRetriever):
             retriever = cls(conn)
             started = time.time()
             report = run(retriever, cases, principals, corpus)
