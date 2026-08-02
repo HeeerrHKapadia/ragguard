@@ -66,6 +66,16 @@ must fall inside.
 | `oracle` — perfect and permitted | 0.0% | 100% | 100.0% | 75.5% | 0.99 |
 | **Phase 1 — dense, no authorization** | **93.1%** | 83.5% | 92.6% | **25.0%** | 0.88 |
 
+Phase 2 measured all three under identical conditions, with the HNSW index in
+place (Phase 1's published figures used exact search, which is why the naive
+row shifts):
+
+| Retriever | Leak rate | vs ceiling | Local | Global | Throughput |
+| --------- | --------: | ---------: | -----: | -----: | ---------: |
+| dense, no authorization | 92.9% | 82.2% | 91.1% | 24.8% | 371 q/s |
+| **post-filter** — retrieve, then drop | **0.0%** | 84.5% | 92.6% | 30.4% | 409 q/s |
+| **pre-filter** — never consider | **0.0%** | **86.8%** | **94.6%** | **32.9%** | 199 q/s |
+
 ### What Phase 1 found
 
 **The naive retriever leaks more than the retriever built to be reckless.**
@@ -87,6 +97,49 @@ number instead of a hope.
 (84 → 543 queries/sec, index built in 0.7s). Small enough to take, and now a
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
+
+### What Phase 2 found
+
+**Both filter placements reach a zero leak rate. They are not equivalent.**
+Pre-filtering beats post-filtering on every quality measure — 86.8% versus
+84.5% of ceiling, and a wider margin on global queries. Same policy, same
+results budget; the only difference is whether the database knew who was
+asking before it chose the candidates.
+
+**The SQL policy is provably identical to the reference implementation** —
+7,668 persona-document comparisons, zero disagreements, checked in CI. This
+is the payoff for keeping `access.py` deliberately slow and obvious: the
+optimised path is verified equivalent rather than assumed to be.
+
+**I predicted post-filtering would collapse recall, and at the default
+settings it did not.** Post-filtering scored *better* than no filtering at
+all. The prediction was directionally right and mechanically wrong, so the
+question got measured properly instead of quietly dropped:
+
+| Oversample | Post-filter, new hire | Post-filter, exec | Pre-filter, new hire | Gap |
+| ---------: | --------------------: | ----------------: | -------------------: | --: |
+| 1 | 82.1% | 93.2% | 96.4% | 14.3% |
+| 6 | 85.7% | 94.0% | 100.0% | 14.3% |
+| 25 | 85.7% | 94.0% | 100.0% | 14.3% |
+| 50 | 92.9% | 94.0% | 100.0% | 7.1% |
+| 100 | 96.4% | 94.0% | 100.0% | 3.6% |
+| 200 | 96.4% | 94.0% | 100.0% | 3.6% |
+
+The collapse is real, and worse than a simple tuning problem. For a persona
+entitled to 7 of 114 documents, post-filtering plateaus at 85.7% and stays
+there until **50× oversample** — and even fetching 1,000 chunks to return 10
+documents never quite reaches what pre-filtering achieves at 6×. The
+workaround costs more than the fix.
+
+**The executive's number never moves.** It sits at 94.0% from 6× onward,
+regardless of everything happening to the new hire. That is precisely why
+this failure survives code review: whoever builds and tests the system is
+almost never the person it happens to.
+
+**Pre-filtering costs roughly half the throughput** — 199 versus 409 queries
+per second — because a selective `WHERE` clause degrades how well the HNSW
+index can be used. That is the exact weakness Phase 3 benchmarks against
+Qdrant, which applies filters during graph traversal rather than around it.
 
 **Parity is not 1.00 at baseline, and that matters for reading Phase 2.**
 No permission filter exists yet, so every persona receives identical results

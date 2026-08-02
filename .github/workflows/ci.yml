@@ -52,6 +52,12 @@ jobs:
       - name: Policy sanity (no persona sees everything or nothing)
         run: uv run python scripts/access_matrix.py
 
+      # The SQL enforcement path and the reference implementation must admit
+      # exactly the same documents for every persona. Two implementations of
+      # one policy is a liability until proven otherwise.
+      - name: SQL policy matches the reference implementation
+        run: uv run python scripts/verify_policy_parity.py
+
       # The golden dataset is committed. Rebuilding it here must reproduce
       # the committed file byte for byte — if generation drifts, eval numbers
       # from different phases stop being comparable and the whole results

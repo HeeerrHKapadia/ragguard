@@ -26,7 +26,11 @@ from ragguard.eval.dataset import load
 from ragguard.eval.metrics import Report
 from ragguard.eval.retriever import LeakyRetriever, NullRetriever, OracleRetriever
 from ragguard.eval.runner import load_corpus_index, run
-from ragguard.retrieval.dense import DenseRetriever
+from ragguard.retrieval.dense import (
+    DenseRetriever,
+    PostFilterRetriever,
+    PreFilterRetriever,
+)
 
 GOLDENS = PROJECT_ROOT / "eval" / "goldens.jsonl"
 
@@ -129,17 +133,40 @@ def main() -> int:
             return 0
 
         print("\n" + "=" * 52)
-        started = time.time()
-        report = run(DenseRetriever(conn), cases, principals, corpus)
-        elapsed = time.time() - started
+        reports = {}
+        for cls in (DenseRetriever, PostFilterRetriever, PreFilterRetriever):
+            retriever = cls(conn)
+            started = time.time()
+            report = run(retriever, cases, principals, corpus)
+            elapsed = time.time() - started
+            reports[retriever.name] = report
+            summarize(retriever.name, report)
+            print(f"  wall clock        {elapsed:>8.1f}s   "
+                  f"({len(cases) / elapsed:.0f} queries/s)")
 
-    summarize("dense-naive", report)
-    print(f"  wall clock        {elapsed:>8.1f}s   ({len(cases) / elapsed:.0f} queries/s)")
+    # Per-persona recall is where post-filtering gives itself away. The
+    # aggregate numbers for the two filtered retrievers look similar; the
+    # split by privilege level does not.
+    print("\n" + "=" * 52)
+    print("\nRecall by persona\n")
+    names = list(reports)
+    header = f"  {'persona':<28}" + "".join(f"{n.split('-')[-1]:>13}" for n in names)
+    print(header)
+    print("  " + "-" * (len(header) - 2))
 
-    parity = report.recall_parity()
-    if parity:
-        worst = min(parity.values())
-        print(f"\n  worst recall parity: {worst:.2f}")
+    personas = sorted(next(iter(reports.values())).recall_by_persona())
+    for persona in personas:
+        cells = "".join(
+            f"{reports[n].recall_by_persona().get(persona, 0):>12.1%} " for n in names
+        )
+        print(f"  {persona:<28}{cells}")
+
+    print("\nRecall parity by tenant\n")
+    print(f"  {'tenant':<28}" + "".join(f"{n.split('-')[-1]:>13}" for n in names))
+    print("  " + "-" * (len(header) - 2))
+    for tenant in sorted(next(iter(reports.values())).recall_parity()):
+        cells = "".join(f"{reports[n].recall_parity().get(tenant, 0):>12.2f} " for n in names)
+        print(f"  {tenant:<28}{cells}")
 
     print()
     return 0
