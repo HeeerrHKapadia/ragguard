@@ -82,9 +82,18 @@ def score_case(
     so relevance and authorization are both resolved against the corpus
     rather than against whatever the retriever claims.
     """
+    # Resolve every returned URI against the corpus index, never against the
+    # metadata the retriever attached to it. A retriever that mislabels a
+    # restricted document as public would otherwise have its own leak waved
+    # through — the component under test would be grading itself.
+    #
+    # A URI absent from the index is counted as a leak rather than skipped:
+    # returning a document the corpus does not contain is its own failure,
+    # and silently ignoring it is how a fabricated citation slips past.
     leaked = tuple(
         doc.uri for doc in retrieved
-        if not can_read(principal, doc.tenant, doc.section, doc.tier)
+        if (truth := doc_index.get(doc.uri)) is None
+        or not can_read(principal, truth.tenant, truth.section, truth.tier)
     )
 
     allowed_relevant = {

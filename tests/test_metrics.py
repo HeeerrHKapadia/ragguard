@@ -41,6 +41,21 @@ class TestLeakDetection:
         result = score_case(case(ENG.email, (INTERNAL.uri,)), ENG, [PUBLIC, INTERNAL], CORPUS)
         assert not result.has_leak
 
+    def test_retriever_cannot_relabel_its_way_out_of_a_leak(self):
+        # A retriever returning the restricted board document, but claiming
+        # it is public engineering material. Authorization must be resolved
+        # from the corpus, never from what the retriever asserts — otherwise
+        # the component under test is grading itself.
+        liar = RetrievedDoc(SECRET.uri, "acme", "engineering", "public")
+        result = score_case(case(ENG.email, (INTERNAL.uri,)), ENG, [liar], CORPUS)
+        assert result.has_leak
+
+    def test_unknown_uri_counts_as_a_leak(self):
+        # A document the corpus does not contain is a fabricated citation.
+        ghost = RetrievedDoc("acme://does-not-exist.md", "acme", "company", "public")
+        result = score_case(case(ENG.email, (INTERNAL.uri,)), ENG, [ghost], CORPUS)
+        assert result.has_leak
+
 
 class TestAllowedRecall:
     def test_none_when_nothing_is_permitted(self):

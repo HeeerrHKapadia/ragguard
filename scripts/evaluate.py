@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pathlib
 import sys
+import time
 
 import psycopg
 
@@ -25,6 +26,7 @@ from ragguard.eval.dataset import load
 from ragguard.eval.metrics import Report
 from ragguard.eval.retriever import LeakyRetriever, NullRetriever, OracleRetriever
 from ragguard.eval.runner import load_corpus_index, run
+from ragguard.retrieval.dense import DenseRetriever
 
 GOLDENS = PROJECT_ROOT / "eval" / "goldens.jsonl"
 
@@ -116,7 +118,30 @@ def main() -> int:
             print(f"  - {p}")
         return 1
 
-    print("Harness calibrated: it detects total leakage and recognises a perfect score.\n")
+    print("Harness calibrated: it detects total leakage and recognises a perfect score.")
+
+    # --- the real baseline, if the corpus has been indexed ----------------
+    with connect() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT count(*) FROM chunks WHERE embedding IS NOT NULL")
+        if cur.fetchone()[0] == 0:
+            print("\nNo embedded chunks. Run: uv run python scripts/index_corpus.py\n")
+            return 0
+
+        print("\n" + "=" * 52)
+        started = time.time()
+        report = run(DenseRetriever(conn), cases, principals, corpus)
+        elapsed = time.time() - started
+
+    summarize("dense-naive", report)
+    print(f"  wall clock        {elapsed:>8.1f}s   ({len(cases) / elapsed:.0f} queries/s)")
+
+    parity = report.recall_parity()
+    if parity:
+        worst = min(parity.values())
+        print(f"\n  worst recall parity: {worst:.2f}")
+
+    print()
     return 0
 
 

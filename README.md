@@ -59,12 +59,42 @@ And the graph layer adds four failure modes that vector RAG doesn't have:
 exist to calibrate the harness, and they bracket the range every real result
 must fall inside.
 
-| Retriever | Leak rate | Recall | vs ceiling | Recall parity |
-| --------- | --------: | -----: | ---------: | ------------: |
-| `null` — returns nothing | 0.0% | 0.0% | 0% | — |
-| `leaky` — no filtering at all | **82.5%** | 95.2% | 100% | 1.00 |
-| `oracle` — perfect and permitted | 0.0% | 95.3% | 100% | 1.00 |
-| Phase 1 — naive baseline | _pending_ | _pending_ | _pending_ | _pending_ |
+| Retriever | Leak rate | vs ceiling | Local | Global | Worst parity |
+| --------- | --------: | ---------: | -----: | -----: | -----------: |
+| `null` — returns nothing | 0.0% | 0% | 0.0% | 0.0% | — |
+| `leaky` — no filtering at all | 82.5% | 100% | 100.0% | 75.3% | 0.99 |
+| `oracle` — perfect and permitted | 0.0% | 100% | 100.0% | 75.5% | 0.99 |
+| **Phase 1 — dense, no authorization** | **93.1%** | 83.5% | 92.6% | **25.0%** | 0.88 |
+
+### What Phase 1 found
+
+**The naive retriever leaks more than the retriever built to be reckless.**
+93.1% against `leaky`'s 82.5%. `leaky` returns the *relevant* documents
+regardless of permission, and relevant documents are often ones the asker is
+entitled to. Dense search returns the nearest neighbours across every tenant,
+so it reaches for material that is neither relevant nor permitted. Semantic
+similarity does not respect organisational boundaries, and nothing about a
+document's meaning signals who owns it.
+
+**Dense retrieval is competent at point lookups and hopeless at
+cross-document questions:** 92.6% local versus 25.0% global. This is the
+premise of the entire GraphRAG argument, measured on this corpus rather than
+assumed from a paper. Phase 5 has to beat 25.0% on global queries by enough
+to justify several times the token cost — and that target now exists as a
+number instead of a hope.
+
+**Approximate search costs 1.27% recall and returns 6.45× the throughput**
+(84 → 543 queries/sec, index built in 0.7s). Small enough to take, and now a
+measurement rather than a guess. This is why Phase 0a shipped without the
+index: exact search had to run first to be the reference.
+
+**Parity is not 1.00 at baseline, and that matters for reading Phase 2.**
+No permission filter exists yet, so every persona receives identical results
+— yet parity ranges 0.88–1.12. The cause is denominators, not filtering: a
+new hire is entitled to 22 documents where an exec is entitled to 300, so the
+same absolute miss moves the smaller ratio far more. **Phase 2's parity must
+be compared against this 0.88–1.12 band, not against 1.00**, or ordinary
+sampling variance will be misread as post-filter collapse.
 
 **Leak rate** — fraction of cases returning any document the persona may not
 read. Case-level, not document-level: one forbidden document among ninety-nine
@@ -260,6 +290,14 @@ enforcement into SQL filters and an authorization service for speed. The only
 way to know those fast paths are correct is to keep a reference implementation
 that is obviously correct, and diff against it. When the eval reports a leak,
 this is the oracle that says what should have happened.
+
+**Authorization is resolved from the corpus, never from what a retriever
+claims.** The scorer originally read each result's tier off the returned
+object — meaning a retriever that mislabelled a restricted document as public
+would have had its own leak waved through. The component under test was
+grading itself. It now resolves every returned URI against the corpus index,
+and a URI absent from that index counts as a leak rather than being skipped,
+because a citation to a document that does not exist is its own failure.
 
 **The eval harness is calibrated against retrievers with known-correct scores.**
 A scorer with an inverted comparison reports encouraging numbers forever and
