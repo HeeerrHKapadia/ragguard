@@ -17,6 +17,7 @@ dependencies = [
     # pulls PyTorch. We only ever run inference, so several gigabytes of
     # training machinery would be dead weight in every install and CI run.
     "fastembed>=0.5",
+    "neo4j>=5.20",            # Knowledge graph driver (Phase 4).
 ]
 
 [dependency-groups]

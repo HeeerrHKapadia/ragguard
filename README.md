@@ -98,6 +98,55 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Phase 4 — the knowledge graph
+
+| | |
+| --- | ---: |
+| Documents | 639 |
+| Concepts | 297 |
+| Relationships | 1,655 |
+| Build time | 0.9s |
+| **Extraction cost** | **$0.00** |
+| Cross-tenant relationships | **0** |
+
+**No LLM was used, and that was a measurement rather than a budget
+constraint.** Handbooks already contain an authored graph: writers link one
+page to another because the pages are related, and headings name the concepts
+a page is about. Both are exact — a link either exists or it does not — and
+free. Paying a model to infer relationships that were explicitly written down
+is worth doing only after the written-down ones are exhausted.
+
+The limitation is real and named rather than hidden: this recovers
+document-to-document relationships and the concepts documents mention. It
+does not recover entity-to-entity facts of the "Person A reports to Person B"
+kind, which is what LLM extraction adds. The extractor interface is narrow so
+an LLM implementation can be dropped in and the difference measured.
+
+Link resolution runs at 17–39% because the corpus is a sample — a link only
+becomes an edge when both endpoints were ingested, so edges fall roughly with
+the square of the sampling rate. Concept nodes carry the connectivity that
+links alone cannot.
+
+**Cross-tenant entity resolution is prevented structurally, not by a check.**
+A concept's identity is `tenant::name`, so "compensation review" in two
+tenants are two different nodes that cannot be merged. A check can be
+forgotten; an identifier that makes the mistake unrepresentable cannot.
+
+#### The leak surface Phase 6 has to defend
+
+| | |
+| --- | ---: |
+| Concepts naming confidential or restricted material | 149 of 297 |
+| Concepts spanning more than one sensitivity tier | **109 (37%)** |
+| Document pairs reachable through a shared concept | 814 |
+
+That middle row is the problem stated as a number. A concept mentioned by
+both an internal document and a restricted one is a path from material a user
+may read to material they may not — and its *name alone* can disclose that
+the restricted document exists and what it concerns. No document-level
+permission check catches this, because nothing about the query touched a
+forbidden document.
+
 ### Phase 3 — the frozen control group
 
 Everything the knowledge graph must beat. Full 884-case set unless noted.

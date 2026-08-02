@@ -30,7 +30,14 @@ class Settings:
     pg_port: int
     embedding_model: str
     embedding_dim: int
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "ragguard_dev_pw"
+    neo4j_bolt_port: int = 7688
     connect_timeout: int = 5
+
+    @property
+    def neo4j_uri(self) -> str:
+        return f"bolt://{self.pg_host}:{self.neo4j_bolt_port}"
 
     @property
     def dsn(self) -> str:
@@ -64,6 +71,9 @@ def load_settings() -> Settings:
         pg_port=int(os.getenv("POSTGRES_PORT", "5433")),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
         embedding_dim=int(os.getenv("EMBEDDING_DIM", "384")),
+        neo4j_user=os.getenv("NEO4J_USER", "neo4j"),
+        neo4j_password=os.getenv("NEO4J_PASSWORD", "ragguard_dev_pw"),
+        neo4j_bolt_port=int(os.getenv("NEO4J_BOLT_PORT", "7688")),
     )
 
 

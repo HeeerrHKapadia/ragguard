@@ -37,5 +37,32 @@ services:
       retries: 10
       start_period: 10s
 
+  neo4j:
+    # The knowledge graph. Added in Phase 4, once there was a measured
+    # baseline for it to be compared against — the whole project rests on
+    # the graph having to earn its place rather than being assumed into it.
+    image: neo4j:5-community
+    container_name: ragguard-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-ragguard_dev_pw}
+      # Community edition allows one database, so tenants are separated by
+      # a property on every node and relationship rather than by database.
+      # That is a deliberate constraint to design against: it means tenant
+      # isolation has to hold inside every single query.
+      NEO4J_server_memory_heap_max__size: 1G
+    ports:
+      - "${NEO4J_HTTP_PORT:-7475}:7474"    # browser UI
+      - "${NEO4J_BOLT_PORT:-7688}:7687"    # driver protocol
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
 volumes:
   pgdata:
+  neo4jdata:
