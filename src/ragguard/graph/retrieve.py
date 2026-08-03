@@ -28,6 +28,7 @@ from neo4j import Driver
 from ragguard.access import Principal
 from ragguard.eval.dataset import GoldenCase
 from ragguard.eval.metrics import RetrievedDoc
+from ragguard.graph.audit import CONCEPT_VISIBLE
 from ragguard.graph.filters import visibility_cypher, visibility_params
 from ragguard.retrieval.fusion import reciprocal_rank_fusion
 
@@ -52,6 +53,37 @@ ORDER BY seed_hits DESC, best_rank ASC
 LIMIT $limit
 """
 
+# The same traversal, with every node on the path checked rather than only
+# the destination.
+#
+# `all(node IN nodes(p) ...)` is the entire difference. Without it a path can
+# run from a permitted seed, through a document the user may not read, to a
+# permitted result — and the forbidden document, invisible in the output, is
+# what selected that result. Measured at 5.8% of paths overall and 64.3% for
+# the least privileged persona, against a document-level leak rate of 0.0%.
+#
+# Concepts are checked by witness rather than by stored tier: a concept is
+# visible when the user can read at least one document that mentions it.
+# A concept named by both internal and restricted documents is legitimate to
+# traverse, because the internal document already entitles the user to know
+# the term exists.
+GUARDED_EXPAND_CYPHER = f"""
+UNWIND $seeds AS seed
+MATCH p = (s:Document {{uri: seed.uri}})-[:LINKS_TO|MENTIONS*1..2]-(n:Document)
+WHERE n.uri <> s.uri
+  AND all(node IN nodes(p) WHERE
+        CASE
+          WHEN node:Concept  THEN {CONCEPT_VISIBLE}
+          WHEN node:Document THEN {visibility_cypher('node')}
+          ELSE false
+        END)
+RETURN n.uri              AS uri,
+       count(DISTINCT s.uri) AS seed_hits,
+       min(seed.rank)     AS best_rank
+ORDER BY seed_hits DESC, best_rank ASC
+LIMIT $limit
+"""
+
 
 class GraphRetriever:
     """Dense seeds, expanded through the graph, fused.
@@ -66,12 +98,15 @@ class GraphRetriever:
     name = "graph"
 
     def __init__(self, seeder, driver: Driver, seed_k: int = SEED_K,
-                 weights: tuple[float, float] = (1.0, 1.0)) -> None:
+                 weights: tuple[float, float] = (1.0, 1.0),
+                 guarded: bool = False) -> None:
         self.seeder = seeder
         self.driver = driver
         self.seed_k = seed_k
         self.weights = weights
-        self.name = f"graph({seeder.name})"
+        self.guarded = guarded
+        self.cypher = GUARDED_EXPAND_CYPHER if guarded else EXPAND_CYPHER
+        self.name = "graph-guarded" if guarded else "graph"
 
     def retrieve(self, case: GoldenCase, principal: Principal, k: int) -> list[RetrievedDoc]:
         seeds = self.seeder.retrieve(case, principal, self.seed_k)
@@ -86,7 +121,7 @@ class GraphRetriever:
         with self.driver.session() as session:
             expanded = [
                 record["uri"]
-                for record in session.run(EXPAND_CYPHER, **params)
+                for record in session.run(self.cypher, **params)
             ]
 
         seed_ranking = [doc.uri for doc in seeds]

@@ -98,6 +98,70 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Phase 6 — leaks a permission check cannot see
+
+Graph retrieval reports a **leak rate of 0.0%**. Every returned document is
+one the user may read. By every metric built so far, the system is clean.
+
+It is not. Filtering the *destination* of a traversal says nothing about
+what the traversal walked *through*, and a path is information even when its
+endpoint is permitted.
+
+| Persona | Paths | Transit violations | Inferable documents |
+| ------- | ----: | -----------------: | ------------------: |
+| exec (all three tenants) | 11,678 | **0.0%** | 0 |
+| eng@sourcegraph | 2,370 | 4.4% | 59 |
+| finance@gitlab | 1,423 | 11.5% | 68 |
+| eng@gitlab | 2,099 | 17.5% | 161 |
+| newhire@gitlab | 1,309 | 25.8% | 420 |
+| **newhire@sourcegraph** | 224 | **64.3%** | 144 |
+| **all** | **29,118** | **5.8%** | **1,174** |
+
+**The gradient is the finding.** Executives have a 0% violation rate because
+nothing is forbidden to them. The least privileged persona has 64.3% — two
+out of every three results were selected by documents they are not allowed
+to see. 35 distinct forbidden documents shaped results across the sample,
+and none of it moved the leak rate by a single point.
+
+**Concept disclosure measured 0.0%.** No concept in this graph has *every*
+source document forbidden to a given persona, so the leak mode exists in
+theory and does not manifest here. Reporting it as a defended risk would be
+dishonest; it is an undefended one that happens not to fire on this data,
+and an LLM-extracted graph or community summaries would likely change that.
+
+#### The fix, and what it cost
+
+Guarding checks every node on a path rather than only its destination —
+`all(node IN nodes(p) ...)`. Concepts are checked by *witness*: a concept is
+visible when the user can read at least one document mentioning it, because
+a concept named by both an internal and a restricted document is legitimate
+to traverse.
+
+| | vs ceiling | Local | Global | Throughput |
+| --- | ---------: | ----: | -----: | ---------: |
+| graph, unguarded | 84.5% | 91.7% | 33.5% | 132 q/s |
+| graph, guarded | **84.6%** | **91.9%** | 33.4% | **157 q/s** |
+
+Transit violations go to zero. Recall does not move — it improves by 0.1
+points — and throughput rises 19%, because pruning paths early does less
+work than walking them and discarding the results.
+
+**The fix is free.** That matters more than it sounds: it removes the only
+argument for not doing it. The 64.3% of paths stripped from the lowest
+privilege persona were redundant, reaching documents other paths already
+reached. A sparser graph might not be so forgiving, which is exactly why
+this was measured rather than assumed.
+
+#### What remains undefended
+
+The 1,174 inferable documents are not fixed. Degree is information: a
+permitted document with six neighbours of which two are visible tells the
+user four documents exist that they cannot see. This is latent rather than
+exploited, because nothing in the current interface exposes neighbour
+counts — but any explainability feature that shows *why* a result surfaced
+would expose it immediately, and that is the feature graph systems are built
+to offer.
+
 ### Phase 5 — the graph does not help, and here is why
 
 The result the project was built to be able to detect.
