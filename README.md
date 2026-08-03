@@ -98,6 +98,45 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Phase 9 — the service
+
+```bash
+uv run uvicorn ragguard.api.app:app --port 8000
+```
+
+Then open `http://localhost:8000` and switch personas.
+
+**The demo is one query asked by three people.** *"compensation review and
+pay bands"*, same index, same code path:
+
+| Persona | Top results |
+| ------- | ----------- |
+| `newhire@gitlab` | GitLab Communication · Performance Indicator Working Group · Measuring Impact — all `public`, nothing about compensation |
+| `eng@gitlab` | Compensation at GitLab · Guide to Total Rewards · Incentives at GitLab — all `internal` |
+| `exec@gitlab` | **Compensation Review Conversations** (`restricted`) · Talent Assessment (`confidential`) · Corporate FP&A (`confidential`) |
+
+Zero of eight results are shared between the new hire and the executive.
+
+**Identity comes from the bearer token and nothing else.** No endpoint
+accepts a persona, tenant, or clearance from a request body — if one did,
+changing what you can read would be a matter of editing a JSON field.
+
+Token handling is tested against forgery directly: wrong signature, the
+`alg: none` attack, expired tokens, and tokens with no subject. Every
+rejection returns an identical message, because distinguishing "expired"
+from "forged" from "absent" is a small courtesy to a legitimate user and a
+useful oracle to everyone else.
+
+**The `/api/graph` endpoint deliberately does not report how many neighbours
+were withheld.** That count is the existence-disclosure risk recorded in
+Phase 8, and an endpoint serving it would promote a latent weakness into a
+supported feature.
+
+Tracing is local rather than Langfuse — spans, a ring buffer, and an
+endpoint — because Langfuse needs an account and the whole project runs
+without credentials. The traces record where time went and deliberately do
+not record what was hidden.
+
 ### Phase 8 — red team
 
 Eight attacks, run in CI. A breach fails the build; a known-open risk is

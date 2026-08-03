@@ -75,6 +75,12 @@ jobs:
           uv run python scripts/build_graph.py
           uv run python scripts/redteam.py
 
+      # Runs the real application, not a mock: startup, dependency wiring,
+      # database and graph all live. Asserts that a persona never receives a
+      # document above their clearance through any endpoint.
+      - name: API behaves correctly for every persona
+        run: uv run python scripts/api_smoke.py
+
       # The golden dataset is committed. Rebuilding it here must reproduce
       # the committed file byte for byte — if generation drifts, eval numbers
       # from different phases stop being comparable and the whole results

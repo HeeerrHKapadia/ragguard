@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ragguard</title>
+<style>
+  :root {
+    --bg:#F4F6F9; --panel:#FFFFFF; --panel-2:#EDF0F5; --line:#DBE0E9;
+    --ink:#171B24; --ink-2:#4A5162; --ink-3:#7D8598;
+    --accent:#4A46B8; --accent-bg:#ECEBFA;
+    --public:#1F6B45;  --public-bg:#E4F1EA;
+    --internal:#1A5B87; --internal-bg:#E2EEF7;
+    --confidential:#9A6410; --confidential-bg:#FBF0DC;
+    --restricted:#A3352F; --restricted-bg:#FBE9E7;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0D1017; --panel:#151A23; --panel-2:#1C222D; --line:#262E3B;
+      --ink:#E8EBF1; --ink-2:#A6AEC0; --ink-3:#6E778B;
+      --accent:#9A95F0; --accent-bg:#221F44;
+      --public:#5FBE8C; --public-bg:#12291E;
+      --internal:#6FB2E0; --internal-bg:#122333;
+      --confidential:#D9A33F; --confidential-bg:#2B2113;
+      --restricted:#E08078; --restricted-bg:#331715;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+         line-height:1.55; padding:28px 20px 60px; }
+  .wrap { max-width:1000px; margin:0 auto; display:flex; flex-direction:column; gap:22px; }
+  h1 { font-size:26px; font-weight:600; margin:0; letter-spacing:-.02em; }
+  .eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+             text-transform:uppercase; color:var(--ink-3); }
+  .lede { color:var(--ink-2); margin:0; max-width:62ch; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:16px 18px; }
+  label { font-family:var(--mono); font-size:11px; letter-spacing:.08em;
+          text-transform:uppercase; color:var(--ink-3); display:block; margin-bottom:6px; }
+  select, input, button { font:inherit; color:inherit; background:var(--panel);
+          border:1px solid var(--line); border-radius:7px; padding:9px 11px; }
+  select, input { width:100%; }
+  button { background:var(--accent); color:#fff; border-color:transparent; cursor:pointer;
+           font-weight:500; padding:9px 18px; }
+  button:hover { filter:brightness(1.08); }
+  button:disabled { opacity:.5; cursor:default; }
+  .controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) auto;
+              gap:12px; align-items:end; }
+  @media (max-width:720px) { .controls { grid-template-columns:minmax(0,1fr); } }
+  .who { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:13px; color:var(--ink-2);
+         margin-top:12px; }
+  .who b { color:var(--ink); font-weight:500; }
+  .result { border-top:1px solid var(--line); padding:12px 0; display:flex;
+            flex-direction:column; gap:5px; }
+  .result:first-of-type { border-top:none; }
+  .rtitle { font-weight:500; }
+  .rmeta { display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+           font-family:var(--mono); font-size:11px; color:var(--ink-3); }
+  .tier { padding:2px 7px; border-radius:4px; letter-spacing:.06em; text-transform:uppercase; }
+  .tier.public{color:var(--public);background:var(--public-bg)}
+  .tier.internal{color:var(--internal);background:var(--internal-bg)}
+  .tier.confidential{color:var(--confidential);background:var(--confidential-bg)}
+  .tier.restricted{color:var(--restricted);background:var(--restricted-bg)}
+  .uri { color:var(--ink-3); word-break:break-all; }
+  .neighbours { margin-top:6px; padding-left:14px; border-left:2px solid var(--line);
+                display:flex; flex-direction:column; gap:4px; }
+  .nb { font-size:12.5px; color:var(--ink-2); display:flex; gap:8px; align-items:center; }
+  .link { background:none; border:none; color:var(--accent); cursor:pointer; padding:0;
+          font-size:12px; font-family:var(--mono); }
+  .trace { font-family:var(--mono); font-size:12px; color:var(--ink-2);
+           display:flex; flex-wrap:wrap; gap:14px; }
+  .empty { color:var(--ink-3); font-size:14px; padding:10px 0; }
+  .note { font-size:12.5px; color:var(--ink-3); margin-top:10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Permission-aware retrieval</div>
+    <h1>ragguard</h1>
+    <p class="lede">Same question, different person, different answers. Switch persona and
+      search — what comes back is decided by who is asking, enforced in the database rather
+      than requested of a model.</p>
+  </header>
+
+  <div class="card">
+    <div class="controls">
+      <div>
+        <label for="persona">Signed in as</label>
+        <select id="persona"></select>
+      </div>
+      <div>
+        <label for="q">Question</label>
+        <input id="q" value="how does compensation review work" autocomplete="off">
+      </div>
+      <button id="go">Search</button>
+    </div>
+    <div class="who" id="who"></div>
+  </div>
+
+  <div class="card">
+    <div class="eyebrow" style="margin-bottom:10px">Results</div>
+    <div id="results"><div class="empty">Run a search to begin.</div></div>
+  </div>
+
+  <div class="card">
+    <div class="eyebrow" style="margin-bottom:10px">Where the time went</div>
+    <div class="trace" id="trace"><span class="empty">No request yet.</span></div>
+    <p class="note">Neighbour counts are never reported. Phase 8 recorded result-count
+      disclosure as an open risk, and showing how many documents were withheld would turn
+      that into a supported feature.</p>
+  </div>
+
+</div>
+
+<script>
+const api = (p, opts) => fetch(p, opts).then(r => r.ok ? r.json() : r.json().then(e => Promise.reject(e)));
+let token = null, directory = [];
+
+const el = id => document.getElementById(id);
+
+async function loadPersonas() {
+  directory = await api('/api/personas');
+  el('persona').innerHTML = directory
+    .map(p => `<option value="${p.email}">${p.tenant} — ${p.name} (${p.title || 'no title'})</option>`)
+    .join('');
+  await signIn();
+}
+
+async function signIn() {
+  const persona = el('persona').value;
+  const res = await api('/api/token', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({persona})
+  });
+  token = res.token;
+  const who = directory.find(p => p.email === persona);
+  el('who').innerHTML = `<span>tenant <b>${who.tenant}</b></span>
+    <span>identity <b>${who.email}</b></span>
+    <span>token issued, identity now comes only from it</span>`;
+}
+
+function tierClass(t) { return ['public','internal','confidential','restricted'].includes(t) ? t : 'internal'; }
+
+async function search() {
+  el('go').disabled = true;
+  try {
+    const res = await api('/api/search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`},
+      body: JSON.stringify({query: el('q').value, k: 8})
+    });
+    render(res);
+  } catch (e) {
+    el('results').innerHTML = `<div class="empty">${e.detail || 'Search failed.'}</div>`;
+  } finally {
+    el('go').disabled = false;
+  }
+}
+
+function render(res) {
+  if (!res.results.length) {
+    el('results').innerHTML = '<div class="empty">Nothing this persona is permitted to see matches that.</div>';
+  } else {
+    el('results').innerHTML = res.results.map((r, i) => `
+      <div class="result">
+        <div class="rtitle">${escapeHtml(r.title)}</div>
+        <div class="rmeta">
+          <span class="tier ${tierClass(r.tier)}">${r.tier}</span>
+          <span>${escapeHtml(r.section)}</span>
+          <span>relevance ${r.relevance}</span>
+          <button class="link" onclick="expand(${i}, '${encodeURIComponent(r.uri)}')">connected to…</button>
+        </div>
+        <div class="uri">${escapeHtml(r.uri)}</div>
+        <div class="neighbours" id="nb-${i}" style="display:none"></div>
+      </div>`).join('');
+  }
+  const t = res.trace;
+  el('trace').innerHTML = [
+    `<span>total <b>${t.total_ms} ms</b></span>`,
+    ...t.spans.map(s => `<span>${s.name} ${s.ms} ms</span>`),
+    `<span>${t.results} results</span>`
+  ].join('');
+}
+
+async function expand(i, uri) {
+  const box = el(`nb-${i}`);
+  if (box.style.display === 'block') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = '<span class="nb">loading…</span>';
+  const res = await api(`/api/graph?uri=${uri}`, {headers: {'Authorization': `Bearer ${token}`}});
+  box.innerHTML = res.neighbours.length
+    ? res.neighbours.map(n => `<div class="nb">
+        <span class="tier ${tierClass(n.tier)}">${n.tier}</span>
+        <span>${escapeHtml(n.title || n.uri)}</span></div>`).join('')
+    : '<span class="nb">No connections this persona may traverse.</span>';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+el('persona').addEventListener('change', signIn);
+el('go').addEventListener('click', search);
+el('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+loadPersonas();
+</script>
+</body>
+</html>
