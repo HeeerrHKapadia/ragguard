@@ -68,6 +68,22 @@ def main() -> int:
                 print(f"  Neo4j unavailable, checking SQL only: {str(exc).strip()[:80]}")
                 graph_available = False
 
+            # An empty graph makes every Cypher query return nothing, which
+            # this script would otherwise report as the policy blocking all
+            # 1729 permitted documents. That reads like a catastrophic policy
+            # bug and is actually a missing build step — worth distinguishing,
+            # because the two have nothing to do with each other.
+            if graph_available:
+                node_count = session.run(
+                    "MATCH (d:Document) RETURN count(d) AS n"
+                ).single()["n"]
+                if node_count == 0:
+                    print("\n  Neo4j is reachable but holds no documents.")
+                    print("  Build the graph first: uv run python scripts/build_graph.py\n")
+                    session.close()
+                    driver_ctx.__exit__(None, None, None)
+                    return 1
+
             problems: dict[str, int] = {"sql-leak": 0, "sql-block": 0,
                                         "cypher-leak": 0, "cypher-block": 0}
 

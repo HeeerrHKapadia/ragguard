@@ -1,9 +1,11 @@
-# CI runs the exact same path a developer runs locally: lint, bring up the
-# real Postgres+pgvector container via docker compose, run the smoke test.
-# No mocked database — if the schema or an operator breaks, CI goes red.
+# CI runs the same path a developer runs locally, against real services.
+# Nothing is mocked: if the schema, an operator, the policy or the API
+# breaks, the build goes red before anyone notices by accident.
 #
-# Later phases extend this with eval gates: leak rate must be exactly 0,
-# and retrieval metrics must not regress, or the build fails.
+# Ordered in two halves — build everything, then verify everything. An
+# earlier version interleaved them and a verification step ran before the
+# graph it checks had been built, which reported a missing build step as a
+# catastrophic policy failure.
 
 name: ci
 
@@ -29,13 +31,14 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      # The access policy is pure functions over plain data, so it tests
-      # without a database or the corpus. It also runs first: if the policy
-      # is wrong, nothing downstream is worth checking.
-      - name: Policy tests
+      # Pure functions over plain data — no services needed, and if the
+      # policy or the scorer is wrong, nothing downstream is worth checking.
+      - name: Unit tests
         run: uv run pytest -q
 
-      - name: Start database
+      # --- build ------------------------------------------------------
+
+      - name: Start services
         run: |
           cp .env.example .env
           docker compose up -d --wait
@@ -49,48 +52,47 @@ jobs:
       - name: Seed
         run: uv run python scripts/seed.py
 
+      - name: Index corpus
+        run: uv run python scripts/index_corpus.py
+
+      - name: Build knowledge graph
+        run: uv run python scripts/build_graph.py
+
+      - name: Load authorization tuples
+        run: uv run python scripts/load_authz.py
+
+      # --- verify -----------------------------------------------------
+
       - name: Policy sanity (no persona sees everything or nothing)
         run: uv run python scripts/access_matrix.py
 
-      # The SQL enforcement path and the reference implementation must admit
-      # exactly the same documents for every persona. Two implementations of
-      # one policy is a liability until proven otherwise.
+      # One policy, four implementations. Every one must admit exactly what
+      # the reference implementation admits, or the answer a user gets
+      # depends on which code path happened to run.
       - name: SQL and Cypher policies match the reference implementation
         run: uv run python scripts/verify_policy_parity.py
 
-      # Fourth implementation of the same policy, as a relationship graph.
-      # Every one of them must admit exactly what the oracle admits, or the
-      # answer a user gets depends on which code path happened to run.
       - name: OpenFGA policy matches the reference implementation
-        run: |
-          uv run python scripts/load_authz.py
-          uv run python scripts/authz_benchmark.py
+        run: uv run python scripts/authz_benchmark.py
 
-      # Every attack that ever worked is a permanent regression test. A
-      # breach fails the build; a documented open risk does not, because
-      # pretending it is closed would be worse than recording it.
-      - name: Red team
-        run: |
-          uv run python scripts/index_corpus.py
-          uv run python scripts/build_graph.py
-          uv run python scripts/redteam.py
-
-      # Runs the real application, not a mock: startup, dependency wiring,
-      # database and graph all live. Asserts that a persona never receives a
-      # document above their clearance through any endpoint.
-      - name: API behaves correctly for every persona
-        run: uv run python scripts/api_smoke.py
-
-      # The golden dataset is committed. Rebuilding it here must reproduce
-      # the committed file byte for byte — if generation drifts, eval numbers
-      # from different phases stop being comparable and the whole results
-      # table becomes fiction.
+      # The golden dataset is committed. Rebuilding must reproduce it byte
+      # for byte, or results from different phases stop being comparable.
       - name: Golden dataset is deterministic
         run: |
           uv run python scripts/build_goldens.py
           git diff --exit-code -- eval/goldens.jsonl
 
-      # Calibration: the harness must report total leakage for a retriever
-      # that ignores permissions, and a clean sweep for one that cannot fail.
+      # The harness must report total leakage for a retriever that ignores
+      # permissions, and a clean sweep for one that cannot fail.
       - name: Eval harness calibration
         run: uv run python scripts/evaluate.py
+
+      # Every attack that ever worked is a permanent regression test.
+      - name: Red team
+        run: uv run python scripts/redteam.py
+
+      # Runs the real application — startup, dependency wiring, database and
+      # graph all live. Asserts no persona receives a document above their
+      # clearance through any endpoint.
+      - name: API behaves correctly for every persona
+        run: uv run python scripts/api_smoke.py
