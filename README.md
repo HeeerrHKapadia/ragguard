@@ -98,6 +98,61 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Filtered search: pgvector vs Qdrant
+
+The benchmark deferred from Phase 3, and the one that corrected an earlier
+claim of mine.
+
+| Persona | Visible | pgvector recall | pgvector | Qdrant recall | Qdrant |
+| ------- | ------: | --------------: | -------: | ------------: | -----: |
+| exec@gitlab | 300 | 100.0% | 5.5 ms | 100.0% | 15.8 ms |
+| finance@gitlab | 230 | 100.0% | 4.2 ms | 100.0% | 19.7 ms |
+| eng@gitlab | 217 | 100.0% | 4.1 ms | 100.0% | 20.2 ms |
+| newhire@gitlab | 22 | 100.0% | **1.0 ms** | 100.0% | 25.4 ms |
+
+Recall is measured against exact sequential scan over the same permitted
+set, so 100% means nothing was missed.
+
+#### What `EXPLAIN` showed, and the Phase 2 claim it corrects
+
+Phase 2 reported that pre-filtering halved throughput and explained it as a
+selective `WHERE` degrading Postgres's use of the HNSW index. The query plans
+say something sharper:
+
+```
+unfiltered   Index Scan using chunks_embedding_hnsw          12.0 ms
+filtered     Bitmap Heap Scan → Index Scan → top-N heapsort   7.3 ms  (300 visible)
+filtered     Bitmap Heap Scan → Index Scan → top-N heapsort   0.5 ms  ( 22 visible)
+```
+
+Postgres does not degrade the HNSW index under a filter. It **abandons it**
+and performs exact search over the permitted rows. That explains all three
+observations at once: recall is 100% because the search is exact, a more
+selective filter is *faster* rather than slower because fewer rows are
+sorted, and Phase 2's "halving" was the planner switching strategies rather
+than an index performing badly.
+
+So at this corpus size the HNSW index contributes nothing to the production
+query path, because every real query carries a permission filter and none of
+them use it.
+
+#### Why this benchmark cannot settle the vendor claim
+
+Qdrant is 4–25× slower here, and that number should not be read as an
+argument about index architecture. At 4,996 vectors both engines find their
+answer in microseconds, so the measurement is dominated by transport —
+pgvector over an open local connection against Qdrant over HTTP.
+
+The comparison only becomes meaningful at a corpus large enough that exact
+scan over the permitted set stops being cheap. Finding that crossover is the
+experiment worth running; this one establishes that it has not been reached.
+
+**Qdrant is therefore not used in the retrieval path.** The measurement
+justified declining to adopt it, which is a perfectly good outcome for a
+benchmark — and the fifth expression of the access policy was verified
+identical to the oracle before that conclusion was drawn, so the decision
+rests on latency rather than on doubt about correctness.
+
 ### Phase 9 — the service
 
 ```bash
@@ -539,9 +594,14 @@ this failure survives code review: whoever builds and tests the system is
 almost never the person it happens to.
 
 **Pre-filtering costs roughly half the throughput** — 199 versus 409 queries
-per second — because a selective `WHERE` clause degrades how well the HNSW
-index can be used. That is the exact weakness Phase 3 benchmarks against
-Qdrant, which applies filters during graph traversal rather than around it.
+per second.
+
+*Corrected later:* the explanation given here at the time was that a
+selective `WHERE` degrades the HNSW index. Query plans in the Qdrant
+benchmark below show something different — Postgres abandons the HNSW index
+entirely under a filter and runs exact search over the permitted rows. The
+cost is the planner changing strategy, not an index performing badly, and
+the exact search it switches to returns 100% recall.
 
 **Parity is not 1.00 at baseline, and that matters for reading Phase 2.**
 No permission filter exists yet, so every persona receives identical results

@@ -22,6 +22,7 @@ dependencies = [
     "fastapi>=0.115",         # API layer (Phase 9).
     "uvicorn[standard]>=0.32",
     "pyjwt>=2.9",             # Bearer tokens.
+    "qdrant-client>=1.12",    # Filterable HNSW comparison.
 ]
 
 [dependency-groups]

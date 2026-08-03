@@ -86,6 +86,25 @@ services:
       retries: 20
       start_period: 10s
 
+  qdrant:
+    # Added last, to test one specific claim: that applying permission
+    # filters *during* HNSW traversal avoids the throughput collapse
+    # measured in Phase 2, where a selective WHERE halved pgvector's rate.
+    image: qdrant/qdrant:latest
+    container_name: ragguard-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6335}:6333"
+    volumes:
+      - qdrantdata:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
 volumes:
   pgdata:
   neo4jdata:
+  qdrantdata:
