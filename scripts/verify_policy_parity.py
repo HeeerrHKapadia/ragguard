@@ -1,17 +1,23 @@
-"""Prove the SQL policy agrees with the reference implementation.
+"""Prove every fast path agrees with the reference implementation.
 
-Phase 0b kept access.py deliberately slow and obvious so that a fast path
-could be diffed against something known-correct. This is that diff.
+Phase 0b kept access.py deliberately slow and obvious so that fast paths
+could be diffed against something known-correct. This is that diff, and
+there are now two of them: SQL for Postgres and Cypher for Neo4j.
 
-Every persona is checked against every document — 12 x 639 comparisons — and
-the SQL predicate must return exactly the set the oracle permits. Not
-approximately, not for a sample: exactly, for all of them.
+Every persona is checked against every document — 12 x 639 comparisons per
+implementation — and both predicates must return exactly the set the oracle
+permits. Not approximately, not for a sample: exactly, for all of them.
 
-Two disagreements are possible and they are not equally bad. SQL admitting
-something the oracle forbids is a leak. SQL rejecting something the oracle
+Three implementations of one policy is three chances to diverge, and a
+divergence between the stores is the worst kind: the graph would return
+documents the relational store refuses, so which answer a user gets would
+depend on which retrieval path happened to run.
+
+Two disagreements are possible and they are not equally bad. Admitting
+something the oracle forbids is a leak. Rejecting something the oracle
 allows is over-blocking. Both are reported, because a policy that silently
-hides material a user is entitled to is a broken policy that no leak metric
-will ever catch.
+hides material a user is entitled to is broken in a way no leak metric will
+ever catch.
 
 Run:  uv run python scripts/verify_policy_parity.py
 """
@@ -27,6 +33,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from ragguard.access import can_read, load_principals
 from ragguard.db import connect
+from ragguard.graph.filters import visibility_cypher, visibility_params
+from ragguard.graph.store import graph_driver
 from ragguard.retrieval.filters import visibility_sql
 
 
@@ -46,11 +54,22 @@ def main() -> int:
                 print("Seed the database first: uv run python scripts/seed.py")
                 return 1
 
+            comparisons = len(principals) * len(documents)
             print(f"\n{len(principals)} personas x {len(documents)} documents "
-                  f"= {len(principals) * len(documents)} comparisons\n")
+                  f"= {comparisons} comparisons per implementation\n")
 
-            total_leaks = 0
-            total_blocks = 0
+            graph_available = True
+            try:
+                driver_ctx = graph_driver()
+                driver = driver_ctx.__enter__()
+                driver.verify_connectivity()
+                session = driver.session()
+            except Exception as exc:  # noqa: BLE001 - any driver failure is the same story
+                print(f"  Neo4j unavailable, checking SQL only: {str(exc).strip()[:80]}")
+                graph_available = False
+
+            problems: dict[str, int] = {"sql-leak": 0, "sql-block": 0,
+                                        "cypher-leak": 0, "cypher-block": 0}
 
             for email in sorted(principals):
                 principal = principals[email]
@@ -69,31 +88,51 @@ def main() -> int:
                 )
                 from_sql = {row[0] for row in cur.fetchall()}
 
-                leaks = from_sql - oracle       # SQL too permissive
-                blocks = oracle - from_sql      # SQL too strict
+                from_cypher: set[str] | None = None
+                if graph_available:
+                    result = session.run(
+                        f"MATCH (d:Document) WHERE {visibility_cypher('d')} RETURN d.uri AS uri",
+                        **visibility_params(principal),
+                    )
+                    from_cypher = {record["uri"] for record in result}
 
-                total_leaks += len(leaks)
-                total_blocks += len(blocks)
+                marks = []
+                for label, produced in (("sql", from_sql), ("cypher", from_cypher)):
+                    if produced is None:
+                        marks.append("--")
+                        continue
+                    leaks = produced - oracle
+                    blocks = oracle - produced
+                    problems[f"{label}-leak"] += len(leaks)
+                    problems[f"{label}-block"] += len(blocks)
+                    marks.append("ok" if not (leaks or blocks) else "MISMATCH")
 
-                status = "ok" if not (leaks or blocks) else "MISMATCH"
-                print(f"  {email:<28} {len(oracle):>4} visible   {status}")
+                    for uri in sorted(leaks)[:2]:
+                        print(f"      {label} admits, oracle forbids : {uri}")
+                    for uri in sorted(blocks)[:2]:
+                        print(f"      {label} blocks, oracle allows  : {uri}")
 
-                for uri in sorted(leaks)[:3]:
-                    print(f"      SQL admits, oracle forbids : {uri}")
-                for uri in sorted(blocks)[:3]:
-                    print(f"      SQL blocks, oracle allows  : {uri}")
+                print(f"  {email:<28} {len(oracle):>4} visible   "
+                      f"sql={marks[0]:<9} cypher={marks[1]}")
+
+            if graph_available:
+                session.close()
+                driver_ctx.__exit__(None, None, None)
 
     except psycopg.OperationalError as exc:
         print(f"Could not reach Postgres: {str(exc).strip()}")
         return 1
 
     print()
-    if total_leaks or total_blocks:
-        print(f"POLICY MISMATCH: {total_leaks} over-permissive, {total_blocks} over-strict")
-        print("The oracle is correct by definition. Fix the SQL.")
+    if any(problems.values()):
+        for key, count in problems.items():
+            if count:
+                print(f"POLICY MISMATCH: {key} = {count}")
+        print("The oracle is correct by definition. Fix the fast path.")
         return 1
 
-    print("SQL policy is identical to the reference implementation.\n")
+    checked = "SQL and Cypher policies are" if graph_available else "SQL policy is"
+    print(f"{checked} identical to the reference implementation.\n")
     return 0
 
 

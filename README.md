@@ -98,6 +98,83 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Phase 5 — the graph does not help, and here is why
+
+The result the project was built to be able to detect.
+
+| Retriever | Local | Global | Throughput |
+| --------- | ----: | -----: | ---------: |
+| dense pre-filter (control) | **94.6%** | 32.9% | 202 q/s |
+| graph, equal weight | 91.7% | 33.5% | 132 q/s |
+| graph, seed-weighted | 94.6% | 32.9% | 199 q/s |
+| graph, expansion-weighted | 55.4% | 29.7% | 164 q/s |
+| *control + reranking* | *91.3%* | ***42.5%*** | *0.7 q/s* |
+
+Graph expansion moves global recall by **+0.6%** and costs 2.9 points of
+local. Cross-encoder reranking — a far more ordinary technique — gains
+**+10.4%** on the same queries. The graph is not close.
+
+#### Why, specifically
+
+A null result is only useful if the cause is known, so the graph was measured
+directly rather than tuned hopefully:
+
+| | |
+| --- | ---: |
+| Section's other documents reachable within two hops | **29%** |
+| `LINKS_TO` edges staying inside a section | 50% |
+| Shared-concept pairs staying inside a section | 57% |
+| Documents with no edges at all | 130 of 639 (20%) |
+| Average documents per concept | 3.0 |
+
+Global queries here are section-shaped, and the graph does not encode section
+membership. Roughly half its edges leave the section, a fifth of documents
+are isolated, and even seeding traversal with a *known correct* document —
+more generosity than a real query gets — reaches only 29% of the rest of its
+section. No weighting fixes that. The edges are real relationships; they
+point somewhere else.
+
+#### What this does and does not show
+
+It shows that a link-and-heading graph over this corpus does not improve
+retrieval on these queries. It does **not** show that GraphRAG fails
+generally. Two things remain untested: LLM-extracted entity graphs, which
+produce denser and differently-shaped edges, and community summarisation,
+which is the mechanism Microsoft's GraphRAG actually uses for global queries
+and which needs an LLM to write the summaries. What was built here is
+traversal, and traversal is not the same thing.
+
+#### The router also failed, and the accuracy figure hides it
+
+Since Phase 3 showed reranking is worth +10.4% on global queries at 174× the
+cost, it only pays if it runs on the queries that benefit. The router
+classifies from the shape of the dense score distribution — peaked for a
+single-answer query, flat when the answer is spread.
+
+| Threshold | Overall | Local | Global |
+| --------: | ------: | ----: | -----: |
+| 0.030 | **79.2%** | 95.8% | **6.1%** |
+| 0.055 | 70.0% | 76.8% | 40.2% |
+| 0.090 | 53.3% | 48.2% | 75.6% |
+
+The best "accuracy" comes from predicting local almost always. **Always
+guessing local scores 81.4% — the router is worse than the trivial
+baseline.** Score spread does not separate these classes, and reporting
+accuracy alone on an 81%-local dataset would have dressed up majority-class
+bias as a working component.
+
+End to end, routing recovered 0.5 of the 10.4 points available:
+
+| | Local | Global | Throughput |
+| --- | ----: | -----: | ---------: |
+| dense only | 94.4% | 32.1% | 381 q/s |
+| rerank everything | 91.3% | **42.5%** | 0.7 q/s |
+| routed | 92.9% | 32.6% | 7.1 q/s |
+
+A useful router needs a stronger signal than score geometry — a trained
+classifier over query text, or an LLM call cheap enough to precede the
+expensive stage.
+
 ### Phase 4 — the knowledge graph
 
 | | |
