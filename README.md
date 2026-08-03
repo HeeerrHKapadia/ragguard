@@ -98,6 +98,56 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Phase 8 — red team
+
+Eight attacks, run in CI. A breach fails the build; a known-open risk is
+recorded rather than quietly closed.
+
+| | Attack | Result |
+| --- | --- | --- |
+| A1 | Cross-tenant extraction by query crafting | 120 crafted queries, 0 foreign documents |
+| A2 | Tier escalation using known titles | 101 exact-title searches, 0 hits |
+| A3 | Existence disclosure via result counts | **open risk** |
+| A4 | Stale permissions after revocation | 217 → 22 on revoke, restored cleanly |
+| A5 | Graph transit through forbidden documents | guard holds; 529 paths would leak unguarded |
+| A6 | Concept nodes bridging tenants | none |
+| A7 | Identifier collision in the authz store | **found and fixed** |
+| A8 | One document dominating every result | top document in 15% of result sets |
+
+**A2 is the most realistic attack in the set** — an employee hears a document
+mentioned in a meeting and searches for it by name. 101 exact-title searches
+against documents each persona is specifically forbidden from reading, zero
+hits.
+
+#### A7: the suite found a vulnerability in Phase 7's own code
+
+OpenFGA ids cannot contain a colon, so document URIs are rewritten. That
+rewrite was **not injective**: `a:b.md` and `a_b.md` both became `a_b.md`,
+which means two documents sharing one authorization object — and therefore
+each other's permissions, the more privileged silently granting access to
+the less.
+
+It happened not to fire on this corpus. All 639 ids were distinct, so every
+test passed and the collision check on real data still passes today. That is
+luck, not design, and it would have become a real breach the first time a
+document URI contained a colon in a different position.
+
+Fixed by appending a digest of the original whenever a rewrite occurs, so
+ids that need no rewriting stay readable and the rest stay unique. The
+adversarial-input check is now part of the suite.
+
+#### A3: an open risk, deliberately
+
+Result counts differ by privilege — 28 for the lowest-privilege persona
+against 40 for an executive on the same queries. The count alone signals how
+much is being withheld.
+
+Not fixed, because the obvious fix does not work. Padding responses to a
+fixed size requires having something to pad with, and a persona entitled to
+seven documents cannot be padded to ten without either repeating results or
+returning documents they may not see. Recording it as a known weakness is
+more honest than a mitigation that only obscures it.
+
 ### Phase 7 — a real authorization service
 
 Four implementations of one policy now: the Python oracle, a SQL predicate,

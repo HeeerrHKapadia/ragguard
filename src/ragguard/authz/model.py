@@ -26,6 +26,7 @@ the graph, for the same reason.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from itertools import pairwise
@@ -167,7 +168,22 @@ TENANT_SEP = "--"
 
 
 def safe_id(raw: str) -> str:
-    return UNSAFE_ID_CHARS.sub("_", raw)
+    """Rewrite an identifier into OpenFGA's allowed character set, injectively.
+
+    Substitution alone is lossy: `a:b.md` and `a_b.md` both become `a_b.md`,
+    so two documents would share one authorization object and therefore each
+    other's permissions — the more privileged one silently granting access to
+    the less. The red-team suite found this before any corpus triggered it.
+
+    Appending a digest of the original whenever a rewrite occurred restores
+    injectivity. Ids that needed no rewriting stay readable, which is most of
+    them, and the rest stay debuggable rather than becoming opaque hashes.
+    """
+    cleaned = UNSAFE_ID_CHARS.sub("_", raw)
+    if cleaned == raw:
+        return cleaned
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+    return f"{cleaned}.{digest}"
 
 
 def scoped(kind: str, tenant: str, name: str) -> str:
