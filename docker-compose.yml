@@ -63,6 +63,29 @@ services:
       retries: 20
       start_period: 20s
 
+  openfga:
+    # Zanzibar-style authorization, the model Google uses for Drive and
+    # YouTube permissions. Added in Phase 7 to replace three hand-written
+    # policy implementations with one service that owns the decision.
+    image: openfga/openfga:latest
+    container_name: ragguard-openfga
+    restart: unless-stopped
+    command: run
+    environment:
+      # In-memory storage: the tuples are rebuilt from Postgres on every run,
+      # so durability here would only create a second source of truth able to
+      # drift from the first.
+      OPENFGA_DATASTORE_ENGINE: memory
+      OPENFGA_LOG_LEVEL: warn
+    ports:
+      - "${OPENFGA_PORT:-8090}:8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=:8081"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
 volumes:
   pgdata:
   neo4jdata:

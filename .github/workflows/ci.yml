@@ -55,8 +55,16 @@ jobs:
       # The SQL enforcement path and the reference implementation must admit
       # exactly the same documents for every persona. Two implementations of
       # one policy is a liability until proven otherwise.
-      - name: SQL policy matches the reference implementation
+      - name: SQL and Cypher policies match the reference implementation
         run: uv run python scripts/verify_policy_parity.py
+
+      # Fourth implementation of the same policy, as a relationship graph.
+      # Every one of them must admit exactly what the oracle admits, or the
+      # answer a user gets depends on which code path happened to run.
+      - name: OpenFGA policy matches the reference implementation
+        run: |
+          uv run python scripts/load_authz.py
+          uv run python scripts/authz_benchmark.py
 
       # The golden dataset is committed. Rebuilding it here must reproduce
       # the committed file byte for byte — if generation drifts, eval numbers

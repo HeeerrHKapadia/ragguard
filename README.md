@@ -98,6 +98,88 @@ number instead of a hope.
 measurement rather than a guess. This is why Phase 0a shipped without the
 index: exact search had to run first to be the reference.
 
+### Phase 7 — a real authorization service
+
+Four implementations of one policy now: the Python oracle, a SQL predicate,
+a Cypher predicate, and a relationship graph in OpenFGA. All four verified
+identical against every persona-document pair, in CI.
+
+#### Modelling an ordered policy in a system with no ordering
+
+Zanzibar-style authorization answers one question — is there a path of
+relationships from this user to this object? It does not compare values, and
+"clearance rank at least the document's tier" is an inequality.
+
+The fix is to make the ordering a relationship. Tiers form a chain, each
+pointing at the next stricter one, and `cleared` inherits along it:
+
+```
+type tier
+  relations
+    define stricter: [tier]
+    define cleared: [user, group#member] or cleared from stricter
+```
+
+A group cleared at `restricted` is cleared at `confidential` by inheritance
+rather than arithmetic. The integer ladder in `access.py` becomes four nodes
+and three edges.
+
+Section elevation gets the same treatment: "finance may read confidential
+material inside finance" is not a scoped comparison but a grant object named
+`finance/confidential` that the group holds and that finance's confidential
+documents point at.
+
+**Tenant isolation is again structural.** Every object id is namespaced —
+`document:gitlab--values.md`, `group:gitlab--engineering` — so a GitLab group
+and a PostHog document share no object and there is no path to traverse.
+
+#### The architectural question, measured
+
+The standard advice for putting an authorization service in front of search
+is to retrieve candidates, then check each result. That is post-filtering,
+and Phase 2 measured it costing the least privileged persona 14.3 points.
+
+| Read path | Latency |
+| --------- | ------: |
+| `Check`, one object | 1.4 ms |
+| `Check`, 300 documents | ~410 ms |
+| `ListObjects`, all at once | **1.9 ms** |
+
+`ListObjects` is **220× faster** than checking each document, so the allowed
+set can be fetched *before* the search and handed to the index as a filter.
+The service stays authoritative and retrieval stays pre-filtered — the
+recommended pattern is not the right one here.
+
+| Retriever | vs ceiling | Local | Global | Throughput |
+| --------- | ---------: | ----: | -----: | ---------: |
+| SQL predicate pre-filter | 86.8% | 94.6% | 32.9% | 217 q/s |
+| **OpenFGA pre-filter** | **86.8%** | **94.6%** | **32.9%** | 34 q/s |
+| post-filter (the usual advice) | 84.5% | 92.6% | 30.4% | 446 q/s |
+
+Identical quality. The cost is throughput: 6.4× slower, because every query
+passes a 300-element allowed-set array to Postgres. The `ListObjects` call
+itself is cheap and happens once per request; the array is the expense, and
+a production system would keep it in a session-scoped temporary table.
+
+**Where this stops working:** `ListObjects` returns a list, so its cost grows
+with what the user can see. At 300 documents per tenant it is an easy win. At
+a million it is not, and the architecture has to change. The pattern that is
+obviously right here is not right at every size.
+
+#### Revocation
+
+| | |
+| --- | ---: |
+| `eng@gitlab` before | 217 documents |
+| after removing group membership | **22 documents** |
+| after restoring it | 217 documents |
+| propagation | **3.0 ms** |
+
+Immediate, because access is computed from tuples at read time rather than
+materialised into an index that would need rebuilding. The stale-permission
+window is one round trip — which is the argument for the service, and the
+thing the SQL predicate cannot offer without a re-index.
+
 ### Phase 6 — leaks a permission check cannot see
 
 Graph retrieval reports a **leak rate of 0.0%**. Every returned document is

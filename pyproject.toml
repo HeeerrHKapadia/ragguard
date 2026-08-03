@@ -18,6 +18,7 @@ dependencies = [
     # training machinery would be dead weight in every install and CI run.
     "fastembed>=0.5",
     "neo4j>=5.20",            # Knowledge graph driver (Phase 4).
+    "openfga-sdk>=0.9",       # Zanzibar-style authorization (Phase 7).
 ]
 
 [dependency-groups]
