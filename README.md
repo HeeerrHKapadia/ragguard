@@ -17,6 +17,40 @@ built first and frozen, and the graph must beat it per query class to justify
 its 3–10x token cost. Where it loses, the router sends queries to the cheap
 path instead.
 
+## Run the whole thing with one command
+
+```bash
+docker run -p 7860:7860 ghcr.io/heeerrhkapadia/ragguard:latest
+```
+
+Then open `http://localhost:7860`.
+
+No database to provision, no corpus to download, no API key, no
+configuration file. The image carries Postgres with pgvector, all 4,996
+embedded chunks, the 384-dimension ONNX embedding model, the API and the
+demo UI. Nothing reaches the network at request time.
+
+That is a deliberate inversion. Seeding and embedding happen at **build**
+time and are baked into the image layers, so the build takes about fifteen
+minutes and the container starts in seconds with data already present. The
+usual arrangement — small image, provision a database, run migrations, load
+data — is better for a system that changes. This one is a fixed demonstration
+over a pinned corpus, so paying once at build beats paying on every start.
+
+It also makes the whole thing free to host, which was the actual constraint:
+
+| | |
+| --- | --- |
+| Image hosting | GitHub Container Registry, free for public images |
+| Build minutes | GitHub Actions, unmetered on public repositories |
+| Running it | Hugging Face Spaces free tier, or any machine with Docker |
+| Credentials needed | none |
+
+The published image is verified before it is tagged: the workflow starts it,
+waits for `/api/health`, and asserts the corpus is actually there. An image
+that boots but holds no documents is worse than a failed build, because it
+looks fine until someone searches.
+
 ## Documentation
 
 | | |
