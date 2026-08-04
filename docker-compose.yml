@@ -95,6 +95,10 @@ services:
     restart: unless-stopped
     ports:
       - "${QDRANT_PORT:-6335}:6333"
+      # gRPC. Comparing Qdrant over HTTP against pgvector over a local socket
+      # measures transport as much as index, and at these latencies that
+      # difference is the same order as the thing being measured.
+      - "${QDRANT_GRPC_PORT:-6336}:6334"
     volumes:
       - qdrantdata:/qdrant/storage
     healthcheck:

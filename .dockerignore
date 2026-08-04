@@ -1,0 +1,14 @@
+# The corpus is ~90MB of handbooks, re-fetchable and not needed in the image.
+data/
+.venv/
+.git/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+.authz_store
+docs/
+tests/
+eval/results/

@@ -26,9 +26,23 @@ COLLECTION = "ragguard_chunks"
 TIERS = ["public", "internal", "confidential", "restricted"]
 
 
-def client() -> QdrantClient:
-    port = os.getenv("QDRANT_PORT", "6335")
-    return QdrantClient(url=f"http://localhost:{port}", timeout=60)
+def client(prefer_grpc: bool = True) -> QdrantClient:
+    """Qdrant client, over gRPC by default.
+
+    The comparison against pgvector is otherwise unfair: pgvector answers on
+    an already-open local socket while Qdrant pays HTTP framing per request.
+    At single-digit milliseconds that overhead is the same magnitude as the
+    difference being measured, so it has to come out of the comparison rather
+    than be reported as an index result.
+    """
+    host = os.getenv("QDRANT_HOST", "localhost")
+    return QdrantClient(
+        host=host,
+        port=int(os.getenv("QDRANT_PORT", "6335")),
+        grpc_port=int(os.getenv("QDRANT_GRPC_PORT", "6336")),
+        prefer_grpc=prefer_grpc,
+        timeout=60,
+    )
 
 
 def ensure_collection(qc: QdrantClient, dim: int = 0) -> None:

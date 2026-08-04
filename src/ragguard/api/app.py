@@ -50,8 +50,22 @@ async def lifespan(_app: FastAPI):
     """
     conn_ctx = connect()
     conn = conn_ctx.__enter__()
-    driver_ctx = graph_driver()
-    driver = driver_ctx.__enter__()
+
+    # The graph is optional. Search — the thing the demo is actually about —
+    # needs only Postgres, so a deployment can run two services instead of
+    # three and the "connected to" expansion degrades to empty rather than
+    # taking the whole service down with it.
+    driver_ctx = None
+    driver = None
+    try:
+        driver_ctx = graph_driver()
+        driver = driver_ctx.__enter__()
+        driver.verify_connectivity()
+    except Exception:  # noqa: BLE001 - any failure means the same thing
+        if driver_ctx is not None:
+            driver_ctx.__exit__(None, None, None)
+        driver_ctx = None
+        driver = None
 
     cur = conn.cursor()
     state["conn"] = conn
@@ -71,7 +85,8 @@ async def lifespan(_app: FastAPI):
     try:
         yield
     finally:
-        driver_ctx.__exit__(None, None, None)
+        if driver_ctx is not None:
+            driver_ctx.__exit__(None, None, None)
         conn_ctx.__exit__(None, None, None)
 
 
@@ -157,6 +172,9 @@ def graph(uri: str, email: str = Depends(current_identity)) -> dict:
     weakness into a supported feature.
     """
     principal = principal_for(email)
+    if state["driver"] is None:
+        return {"origin": uri, "neighbours": [], "graph": "unavailable"}
+
     params = visibility_params(principal)
     params["uri"] = uri
 
