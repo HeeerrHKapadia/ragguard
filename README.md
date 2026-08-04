@@ -178,22 +178,50 @@ So at this corpus size the HNSW index contributes nothing to the production
 query path, because every real query carries a permission filter and none of
 them use it.
 
-#### Why this benchmark cannot settle the vendor claim
+#### The first version of this benchmark was unfair
 
-Qdrant is 4–25× slower here, and that number should not be read as an
-argument about index architecture. At 4,996 vectors both engines find their
-answer in microseconds, so the measurement is dominated by transport —
-pgvector over an open local connection against Qdrant over HTTP.
+Qdrant looked 4–25× slower, and the comparison was rigged without meaning to
+be: pgvector answered on an already-open local socket while Qdrant paid HTTP
+framing on every request. At single-digit milliseconds that overhead is the
+same magnitude as the difference being measured.
 
-The comparison only becomes meaningful at a corpus large enough that exact
-scan over the permitted set stops being cheap. Finding that crossover is the
-experiment worth running; this one establishes that it has not been reached.
+Switching Qdrant to gRPC moved narrow-filter latency from **9.2ms to 1.1ms**
+at 5,000 vectors. Most of the original gap was transport, not index.
 
-**Qdrant is therefore not used in the retrieval path.** The measurement
-justified declining to adopt it, which is a perfectly good outcome for a
-benchmark — and the fifth expression of the access policy was verified
-identical to the oracle before that conclusion was drawn, so the decision
-rests on latency rather than on doubt about correctness.
+#### The crossover, with transport equalised
+
+Scaled by perturbing real embeddings and renormalising rather than sampling
+random ones — HNSW performance depends on clustering, and uniform vectors
+are a pathological case that would flatter exact scan.
+
+| Vectors | pgvector broad | Qdrant broad | pgvector narrow | Qdrant narrow |
+| ------: | -------------: | -----------: | --------------: | ------------: |
+| 25,000 | 1.3 ms | 1.8 ms | 1.3 ms | **1.2 ms** |
+| 100,000 | 2.1 ms | 2.2 ms | 1.3 ms | 1.3 ms |
+| 250,000 | 3.1 ms | **1.9 ms** | 2.8 ms | **2.0 ms** |
+| 500,000 | 6.5 ms | **5.3 ms** | 4.7 ms | 4.7 ms |
+
+pgvector grows roughly with the permitted-set size, which is what exact scan
+predicts. Qdrant grows more slowly. The lines cross somewhere between 25,000
+and 250,000 vectors depending on how selective the filter is.
+
+**Two caveats, because the numbers are closer than the table suggests.** The
+narrow-filter crossover at 25,000 is 1.2ms against 1.3ms — inside the noise,
+and not a result worth quoting on its own. The broad-filter crossing at
+250,000 (1.9ms against 3.1ms) is the defensible one. Qdrant's jump from
+1.9ms to 5.3ms between 250,000 and 500,000 is larger than the trend explains,
+which says 20 probe queries is a thin sample.
+
+Absolute differences stay under 7ms throughout. Neither engine is slow at
+these sizes; the question is only which grows faster.
+
+**Qdrant is still not used in the retrieval path**, and that decision now has
+a stated boundary rather than resting on a mismeasurement. At this project's
+actual scale — 4,996 vectors — pgvector wins and the extra service earns
+nothing. Above roughly a quarter of a million vectors with permission filters
+on every query, the conclusion inverts and this benchmark is the thing to
+re-run. The Qdrant filter was verified identical to the oracle across all
+twelve personas first, so the choice is about latency and not correctness.
 
 ### Phase 9 — the service
 
