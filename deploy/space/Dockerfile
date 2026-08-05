@@ -71,17 +71,24 @@ ENV POSTGRES_HOST=127.0.0.1 \
     POSTGRES_DB=ragguard \
     EMBEDDING_MODEL=BAAI/bge-small-en-v1.5 \
     EMBEDDING_DIM=384 \
-    # Half the corpus. Embedding dominates the build and a free Space build
-    # has a time limit, so the demo runs on 300 documents where the measured
-    # results use 639.
+    # 240 documents where the measured results use 639. Embedding dominates
+    # the build and a free Space build has a time limit.
     #
-    # Restricted documents are never sampled away, so all 52 survive the cut
-    # and the executive still sees material an engineer cannot. A smaller
-    # corpus that lost the sensitive tier would demonstrate the opposite of
-    # the point. 100 rather than something lower because below that GitLab
-    # drops to two or three public documents, and a new hire receiving almost
-    # nothing reads as a broken demo rather than a correctly restricted one.
-    MAX_DOCS_PER_TENANT=100
+    # Restricted documents are exempt from the trim — all 52 survive — so
+    # the executive still sees material an engineer cannot, which is the
+    # entire demonstration.
+    #
+    # Public is deliberately NOT protected, despite a new hire being able to
+    # read nothing else. Protecting it consumed most of GitLab's budget
+    # (44 public + 34 restricted of 80), leaving two internal documents and
+    # making the engineer's results identical to the new hire's. Guarding
+    # the bottom of the range collapsed the middle of it.
+    #
+    # The constraint that matters is not tier coverage but whether adjacent
+    # personas see different corpora. scripts/corpus_report.py checks that
+    # directly, because every tier can be non-empty while two privilege
+    # levels are indistinguishable.
+    MAX_DOCS_PER_TENANT=80
 
 # POSTGRES_PASSWORD is set per-RUN rather than as an ENV layer. The cluster
 # is created with trust auth and listens only on 127.0.0.1 inside the

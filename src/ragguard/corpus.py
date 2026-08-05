@@ -143,6 +143,8 @@ def _spread(items: list[Document], keep: int) -> list[Document]:
     and because it is index arithmetic rather than randomness, re-running
     yields the identical corpus.
     """
+    if keep <= 0:
+        return []
     if len(items) <= keep:
         return list(items)
     stride = len(items) / keep
@@ -154,28 +156,58 @@ def stratified_sample(
     max_per_section: int,
     max_per_tenant: int,
     never_sample_tiers: set[str],
+    cap_protected_sections: bool = False,
 ) -> list[Document]:
     """Trim a tenant's documents while protecting the tiers that matter.
 
-    Two passes. First cap each section so no single department dominates.
-    Then, if the tenant is still over budget, trim further — but only from
-    tiers that are safe to trim. Restricted documents are what the leak
-    tests are built on and public handbooks contain very few of them, so
-    they are never sampled away; the bulk internal tier absorbs the cut.
+    Two passes. Cap each section so no department dominates, then trim to the
+    tenant budget — skipping the protected tiers, since restricted documents
+    are what the leak tests are built on and public handbooks contain few of
+    them.
+
+    `cap_protected_sections` decides whether protected tiers also face the
+    per-section cap, and it defaults to False because that is what produced
+    every published measurement.
+
+    The distinction is invisible while only `restricted` is protected: those
+    sections are all smaller than the cap anyway. It stops being invisible
+    the moment `public` is protected for a smaller demo build — one tenant's
+    corpus grew from 300 documents to 774, because "never sampled away" had
+    quietly meant "never capped" and the largest public sections arrived
+    whole.
+
+    Turning the flag on is the correct behaviour and costs one document at
+    the default settings, which is enough to change the golden dataset. So it
+    is opt-in: the deployment sets it, and the measurements do not move.
     """
-    protected = [d for d in docs if d.tier in never_sample_tiers]
-    trimmable = [d for d in docs if d.tier not in never_sample_tiers]
+    if cap_protected_sections:
+        by_section: dict[str, list[Document]] = {}
+        for doc in docs:
+            by_section.setdefault(doc.section, []).append(doc)
+        pool: list[Document] = []
+        for section in sorted(by_section):
+            pool.extend(_spread(by_section[section], max_per_section))
+        protected = [d for d in pool if d.tier in never_sample_tiers]
+        kept = [d for d in pool if d.tier not in never_sample_tiers]
+    else:
+        protected = [d for d in docs if d.tier in never_sample_tiers]
+        trimmable = [d for d in docs if d.tier not in never_sample_tiers]
 
-    by_section: dict[str, list[Document]] = {}
-    for doc in trimmable:
-        by_section.setdefault(doc.section, []).append(doc)
+        by_section = {}
+        for doc in trimmable:
+            by_section.setdefault(doc.section, []).append(doc)
+        kept = []
+        for section in sorted(by_section):
+            kept.extend(_spread(by_section[section], max_per_section))
 
-    kept: list[Document] = []
-    for section in sorted(by_section):
-        kept.extend(_spread(by_section[section], max_per_section))
-
+    # When the protected tiers already fill or exceed the budget, nothing
+    # trimmable survives. An earlier `if budget > 0` guard skipped trimming
+    # entirely in that case, so asking for a *smaller* corpus produced a
+    # larger one — cap 40 yielded 647 documents while cap 80 yielded 240.
+    # It never fired while only restricted was protected, because 34 is
+    # comfortably under 300.
     budget = max_per_tenant - len(protected)
-    if budget > 0 and len(kept) > budget:
+    if len(kept) > budget:
         kept = _spread(sorted(kept, key=lambda d: d.source_uri), budget)
 
     return sorted(protected + kept, key=lambda d: d.source_uri)
@@ -205,13 +237,30 @@ def build_corpus() -> tuple[dict, dict[str, list[Document]]]:
     max_per_tenant = int(
         os.getenv("MAX_DOCS_PER_TENANT", sampling.get("max_docs_per_tenant", 300))
     )
-    never_sample = set(sampling.get("never_sample_tiers", []))
+
+    # NEVER_SAMPLE_TIERS is the other half of the deployment override. The
+    # binding constraint on shrinking the corpus is not the total — it is
+    # that public documents run out, and a new hire who can only read public
+    # material then receives almost nothing. Protecting that tier as well
+    # costs 57 documents in total and lets the cap fall much further before
+    # the demo stops making sense.
+    never_sample = set(
+        os.getenv(
+            "NEVER_SAMPLE_TIERS",
+            ",".join(sampling.get("never_sample_tiers", [])),
+        ).split(",")
+    ) - {""}
     min_chars = sampling.get("min_chars", 400)
+
+    # Only meaningful alongside an expanded protected set, so it is tied to
+    # that override rather than exposed as a third knob nobody would set on
+    # its own.
+    cap_protected = "NEVER_SAMPLE_TIERS" in os.environ
 
     result: dict[str, list[Document]] = {}
     for tenant in cfg["tenants"]:
         found = discover(tenant, min_chars)
         result[tenant["slug"]] = stratified_sample(
-            found, max_per_section, max_per_tenant, never_sample
+            found, max_per_section, max_per_tenant, never_sample, cap_protected
         )
     return cfg, result

@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ragguard.access import Principal, load_principals
+from ragguard.access import TIER_RANK, Principal, load_principals
 from ragguard.api.auth import current_identity, issue_token
 from ragguard.api.tracing import recent, span, trace
 from ragguard.config import PROJECT_ROOT, settings
@@ -78,9 +78,23 @@ async def lifespan(_app: FastAPI):
              FROM users u JOIN tenants t ON t.id = u.tenant_id
          ORDER BY t.slug, u.email"""
     )
-    state["directory"] = [
+    # Ordered by privilege rather than alphabetically, so the dropdown reads
+    # bottom to top and stepping through it tells the story: results appear
+    # as clearance rises. Alphabetical put the new hire last, which buries
+    # the comparison the demo exists to make.
+    directory = [
         {"email": e, "name": n, "title": ti, "tenant": s} for e, n, ti, s in cur.fetchall()
     ]
+    principals = state["principals"]
+    state["directory"] = sorted(
+        directory,
+        key=lambda p: (
+            p["tenant"],
+            TIER_RANK[principals[p["email"]].max_clearance]
+            if p["email"] in principals else 0,
+            p["email"],
+        ),
+    )
 
     try:
         yield

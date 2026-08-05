@@ -29,11 +29,14 @@ The corpus is three real public company handbooks — GitLab, Sourcegraph and
 PostHog — treated as separate tenants, with sensitivity tiers derived from
 the directories those companies already use.
 
-**This demo runs on 300 documents; the measured results in the repository
+**This demo runs on 240 documents; the measured results in the repository
 use 639.** Embedding dominates the image build and a free Space build has a
-time limit, so the corpus is halved here. All 52 restricted documents
-survive the cut — they are exempt from sampling — so the persona contrast is
-unchanged even though the numbers will not match the README exactly.
+time limit, so the corpus is trimmed here.
+
+Restricted documents are exempt from the trim, so all 52 survive and the
+executive still sees material an engineer cannot. Every persona sees a
+different corpus at this size — that property is checked rather than assumed
+— though a new hire has fewer public pages to find than in the full run.
 
 Everything runs locally inside the container: Postgres with pgvector, a
 384-dimension ONNX embedding model, and the API. No external service, no API
