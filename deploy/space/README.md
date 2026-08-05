@@ -27,8 +27,13 @@ Zero of eight results are shared between the new hire and the executive.
 
 The corpus is three real public company handbooks — GitLab, Sourcegraph and
 PostHog — treated as separate tenants, with sensitivity tiers derived from
-the directories those companies already use. 639 documents, 4,996 embedded
-chunks, all baked into this image.
+the directories those companies already use.
+
+**This demo runs on 300 documents; the measured results in the repository
+use 639.** Embedding dominates the image build and a free Space build has a
+time limit, so the corpus is halved here. All 52 restricted documents
+survive the cut — they are exempt from sampling — so the persona contrast is
+unchanged even though the numbers will not match the README exactly.
 
 Everything runs locally inside the container: Postgres with pgvector, a
 384-dimension ONNX embedding model, and the API. No external service, no API

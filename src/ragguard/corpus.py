@@ -8,6 +8,7 @@ the database imports from here.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -181,11 +182,29 @@ def stratified_sample(
 
 
 def build_corpus() -> tuple[dict, dict[str, list[Document]]]:
-    """Load config and return (config, {tenant_slug: sampled documents})."""
+    """Load config and return (config, {tenant_slug: sampled documents}).
+
+    MAX_DOCS_PER_TENANT overrides the configured cap. It exists for the
+    deployment image, where embedding the full corpus at build time is the
+    dominant cost and a free build has a time limit.
+
+    The override is an environment variable rather than a config edit on
+    purpose. Changing tenants.yaml would regenerate the golden dataset,
+    break the determinism check in CI, and silently invalidate every number
+    in the README — the measurements and the demo have to be able to
+    disagree about corpus size without one corrupting the other.
+
+    Restricted documents stay protected from sampling at any cap, so a
+    smaller corpus still contains the material the persona contrast depends
+    on. A demo where the executive sees nothing an engineer cannot would
+    demonstrate the opposite of the point.
+    """
     cfg = load_config()
     sampling = cfg.get("sampling", {})
     max_per_section = sampling.get("max_docs_per_section", 25)
-    max_per_tenant = sampling.get("max_docs_per_tenant", 300)
+    max_per_tenant = int(
+        os.getenv("MAX_DOCS_PER_TENANT", sampling.get("max_docs_per_tenant", 300))
+    )
     never_sample = set(sampling.get("never_sample_tiers", []))
     min_chars = sampling.get("min_chars", 400)
 

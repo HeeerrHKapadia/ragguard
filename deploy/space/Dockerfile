@@ -70,7 +70,18 @@ ENV POSTGRES_HOST=127.0.0.1 \
     POSTGRES_USER=ragguard \
     POSTGRES_DB=ragguard \
     EMBEDDING_MODEL=BAAI/bge-small-en-v1.5 \
-    EMBEDDING_DIM=384
+    EMBEDDING_DIM=384 \
+    # Half the corpus. Embedding dominates the build and a free Space build
+    # has a time limit, so the demo runs on 300 documents where the measured
+    # results use 639.
+    #
+    # Restricted documents are never sampled away, so all 52 survive the cut
+    # and the executive still sees material an engineer cannot. A smaller
+    # corpus that lost the sensitive tier would demonstrate the opposite of
+    # the point. 100 rather than something lower because below that GitLab
+    # drops to two or three public documents, and a new hire receiving almost
+    # nothing reads as a broken demo rather than a correctly restricted one.
+    MAX_DOCS_PER_TENANT=100
 
 # POSTGRES_PASSWORD is set per-RUN rather than as an ENV layer. The cluster
 # is created with trust auth and listens only on 127.0.0.1 inside the
