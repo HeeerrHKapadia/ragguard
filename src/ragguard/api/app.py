@@ -25,6 +25,8 @@ from ragguard.api.tracing import recent, span, trace
 from ragguard.config import PROJECT_ROOT, settings
 from ragguard.db import close_pool, get_pool
 from ragguard.eval.dataset import GoldenCase
+from ragguard.generation.context import retrieve_context
+from ragguard.generation.llm import LLMGenerator
 from ragguard.graph.filters import visibility_cypher, visibility_params
 from ragguard.graph.store import graph_driver
 from ragguard.retrieval.dense import PreFilterRetriever
@@ -32,6 +34,10 @@ from ragguard.retrieval.dense import PreFilterRetriever
 STATIC = PROJECT_ROOT / "static"
 
 state: dict = {}
+
+# Chosen once at import: an LLM backend if OPENAI_API_KEY is set, otherwise the
+# extractive generator. Either way it only ever sees permitted snippets.
+GENERATOR = LLMGenerator.from_env()
 
 
 @asynccontextmanager
@@ -113,6 +119,11 @@ class SearchRequest(BaseModel):
     k: int = Field(default=8, ge=1, le=25)
 
 
+class AnswerRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    k: int = Field(default=5, ge=1, le=15)
+
+
 @app.get("/api/personas")
 def personas() -> list[dict]:
     """Who can be signed in as. Demo scaffolding, not a real directory."""
@@ -168,6 +179,28 @@ def search(request: SearchRequest, email: str = Depends(current_identity)) -> di
         ],
         "trace": record.as_dict(),
     }
+
+
+@app.post("/api/answer")
+def answer(request: AnswerRequest, email: str = Depends(current_identity)) -> dict:
+    """A guarded, cited answer for this persona.
+
+    The generator only ever sees snippets that already passed the visibility
+    filter in `retrieve_context`, so it physically cannot ground a claim in a
+    document the persona may not read — the same guarantee `/api/search` gives,
+    extended through generation.
+    """
+    principal = principal_for(email)
+
+    with trace(email, request.query) as record:
+        with state["pool"].connection() as conn:
+            with span(record, "retrieve"):
+                snippets = retrieve_context(conn, request.query, principal, request.k)
+            with span(record, "generate"):
+                ans = GENERATOR.generate(request.query, principal, snippets)
+        record.results = len(snippets)
+
+    return {"persona": email, "backend": ans.backend, "answer": ans.as_dict()}
 
 
 @app.get("/api/graph")
