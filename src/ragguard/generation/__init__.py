@@ -30,8 +30,8 @@ __all__ = [
     "Answer",
     "Citation",
     "Claim",
+    "ExtractiveGenerator",
     "Generator",
     "Snippet",
     "retrieve_context",
-    "ExtractiveGenerator",
 ]
