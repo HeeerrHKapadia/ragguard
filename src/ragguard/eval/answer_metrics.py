@@ -126,7 +126,12 @@ class AnswerLeakChecker:
                 allowed |= self._ngrams[uri]
         return allowed
 
-    def check(self, answer: Answer, principal: Principal) -> AnswerLeakResult:
+    def check(
+        self,
+        answer: Answer,
+        principal: Principal,
+        shown_texts: list[str] | None = None,
+    ) -> AnswerLeakResult:
         cited_forbidden: list[str] = []
         unknown: list[str] = []
         for c in answer.citations:
@@ -137,10 +142,24 @@ class AnswerLeakChecker:
                 cited_forbidden.append(c.uri)
 
         # Content leak: distinctive wording of a forbidden doc appearing in the
-        # answer. "Distinctive" = the forbidden doc's n-grams minus everything
-        # the persona is allowed to see, so shared boilerplate never false-fires.
-        answer_ng = ngrams(answer.text)
+        # answer's CLAIMS — the substantive statements the generator asserts,
+        # not the structural chrome (preamble, rendered source list) whose
+        # boilerplate could coincidentally match a document.
+        #
+        # The permitted baseline includes the exact snippets the persona was
+        # shown (`shown_texts`), which the caller sources from the permission-
+        # filtered retriever. So quoting permitted material — even wording that
+        # a chunk boundary made absent from the corpus n-grams — can never
+        # register as a leak; only wording unique to a forbidden document the
+        # persona was never shown does.
+        answer_ng: set[int] = set()
+        for claim in answer.claims:
+            answer_ng |= ngrams(claim.text)
+
         permitted_ng = self._permitted_ngrams(principal)
+        for text in shown_texts or ():
+            permitted_ng |= ngrams(text)
+
         content_leak: list[str] = []
         if answer_ng:
             for uri, rec in self._meta.items():
