@@ -32,7 +32,7 @@ from ragguard.eval.dataset import GoldenCase
 from ragguard.eval.metrics import RetrievedDoc
 
 # 80MB, trained on MS MARCO. Small enough to run on CPU inside CI, which
-# matters more here than the last point of accuracy from a 1GB model.
+# matters more than the last point of accuracy from a 1GB model.
 RERANK_MODEL = "Xenova/ms-marco-MiniLM-L-6-v2"
 
 # How many documents the first stage hands over. Too few and reranking can
@@ -81,15 +81,21 @@ class RerankingRetriever:
         )
         return {uri: body[:2000] for uri, body in cur.fetchall()}
 
-    def retrieve(self, case: GoldenCase, principal: Principal, k: int) -> list[RetrievedDoc]:
-        candidates = self.inner.retrieve(case, principal, self.shortlist)
+    def rerank_candidates(
+        self,
+        case: GoldenCase,
+        candidates: list[RetrievedDoc],
+        k: int,
+    ) -> list[RetrievedDoc]:
+        """Rescore an existing shortlist — used by the router to reuse probes."""
         if len(candidates) <= 1:
             return candidates[:k]
 
-        texts = self._document_text([doc.uri for doc in candidates])
-        scorable = [doc for doc in candidates if doc.uri in texts]
+        shortlist = candidates[: self.shortlist]
+        texts = self._document_text([doc.uri for doc in shortlist])
+        scorable = [doc for doc in shortlist if doc.uri in texts]
         if not scorable:
-            return candidates[:k]
+            return shortlist[:k]
 
         scores = list(
             get_reranker().rerank(case.query, [texts[doc.uri] for doc in scorable])
@@ -99,7 +105,11 @@ class RerankingRetriever:
         return [
             RetrievedDoc(
                 uri=doc.uri, tenant=doc.tenant, section=doc.section,
-                tier=doc.tier, score=float(score),
+                tier=doc.tier, score=float(score), title=doc.title,
             )
             for doc, score in ranked[:k]
         ]
+
+    def retrieve(self, case: GoldenCase, principal: Principal, k: int) -> list[RetrievedDoc]:
+        candidates = self.inner.retrieve(case, principal, self.shortlist)
+        return self.rerank_candidates(case, candidates, k)

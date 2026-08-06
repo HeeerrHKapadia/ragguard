@@ -23,6 +23,7 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "pyjwt>=2.9",             # Bearer tokens.
     "qdrant-client>=1.12",    # Filterable HNSW comparison.
+    "psycopg-pool>=3.2",
 ]
 
 [dependency-groups]

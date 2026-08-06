@@ -63,6 +63,9 @@ class HybridRetriever(_BaseDense):
     that filtering during retrieval rather than after it is worth several
     points of recall for low-privilege users; doing it in one channel and
     not the other would reintroduce exactly that loss.
+
+    Dense and lexical rankings run in a single SQL statement so the request
+    path pays one round-trip instead of three (dense + lexical + hydrate).
     """
 
     name = "hybrid-rrf"
@@ -71,66 +74,89 @@ class HybridRetriever(_BaseDense):
         super().__init__(conn, oversample)
         self.weights = weights
 
-    def _dense_ranking(self, query: str, principal: Principal) -> list[str]:
-        where, params = visibility_sql(principal)
-        params["vec"] = self._embed(query)
-        params["limit"] = POOL
-
-        cur = self.conn.cursor()
-        cur.execute(
-            f"""SELECT d.source_uri
-                  FROM chunks c
-                  JOIN documents d ON d.id = c.document_id
-                  JOIN tenants   t ON t.id = d.tenant_id
-                 WHERE {where}
-              ORDER BY c.embedding <=> %(vec)s
-                 LIMIT %(limit)s""",
-            params,
-        )
-        return dedupe([row[0] for row in cur.fetchall()])
-
-    def _lexical_ranking(self, query: str, principal: Principal) -> list[str]:
-        expression = to_websearch_or(query)
-        if not expression:
-            return []
-
-        where, params = visibility_sql(principal)
-        params["q"] = expression
-        params["limit"] = POOL
-
-        cur = self.conn.cursor()
-        cur.execute(
-            f"""SELECT d.source_uri
-                  FROM chunks c
-                  JOIN documents d ON d.id = c.document_id
-                  JOIN tenants   t ON t.id = d.tenant_id
-                 WHERE {where}
-                   AND c.tsv @@ websearch_to_tsquery('english', %(q)s)
-              ORDER BY ts_rank_cd(c.tsv, websearch_to_tsquery('english', %(q)s)) DESC
-                 LIMIT %(limit)s""",
-            params,
-        )
-        return dedupe([row[0] for row in cur.fetchall()])
-
     def retrieve(self, case: GoldenCase, principal: Principal, k: int) -> list[RetrievedDoc]:
-        dense = self._dense_ranking(case.query, principal)
-        lexical = self._lexical_ranking(case.query, principal)
-
+        dense, lexical = self._rankings(case.query, principal)
         fused = reciprocal_rank_fusion([dense, lexical], weights=list(self.weights))[:k]
         if not fused:
             return []
-
         return self._hydrate([uri for uri, _ in fused], dict(fused))
 
-    def _hydrate(self, uris: list[str], scores: dict[str, float]) -> list[RetrievedDoc]:
-        """Attach tenant, section and tier to the fused URIs.
+    def _rankings(self, query: str, principal: Principal) -> tuple[list[str], list[str]]:
+        """Return (dense_uris, lexical_uris) from one database round-trip."""
+        where, params = visibility_sql(principal)
+        expression = to_websearch_or(query)
+        params["vec"] = self._embed(query)
+        params["q"] = expression
+        params["limit"] = POOL
 
-        The scorer re-resolves all of this against the corpus anyway, but a
-        retriever that returns bare strings is useless outside the harness.
-        """
+        # Lexical half is skipped when the query has no searchable terms;
+        # the CTE still runs but the tsquery match yields nothing.
+        # Subqueries keep ORDER BY … LIMIT under the ANN / FTS plans. A bare
+        # window over the filtered set would score every permitted chunk.
+        # Ranks are assigned *after* the limit so the planner can stop early.
         cur = self.conn.cursor()
         cur.execute(
-            """SELECT d.source_uri, t.slug, d.section, d.sensitivity
+            f"""
+            WITH
+            q AS (
+                SELECT CASE
+                         WHEN %(q)s = '' THEN NULL
+                         ELSE websearch_to_tsquery('english', %(q)s)
+                       END AS tsq
+            ),
+            dense AS (
+                SELECT uri, row_number() OVER (ORDER BY distance) AS rnk
+                  FROM (
+                    SELECT d.source_uri AS uri,
+                           c.embedding <=> %(vec)s AS distance
+                      FROM chunks c
+                      JOIN documents d ON d.id = c.document_id
+                      JOIN tenants   t ON t.id = d.tenant_id
+                     WHERE {where}
+                  ORDER BY distance
+                     LIMIT %(limit)s
+                  ) denserows
+            ),
+            lexical AS (
+                SELECT uri, row_number() OVER (ORDER BY rank DESC) AS rnk
+                  FROM (
+                    SELECT d.source_uri AS uri,
+                           ts_rank_cd(c.tsv, q.tsq) AS rank
+                      FROM chunks c
+                      JOIN documents d ON d.id = c.document_id
+                      JOIN tenants   t ON t.id = d.tenant_id
+                      CROSS JOIN q
+                     WHERE {where}
+                       AND q.tsq IS NOT NULL
+                       AND c.tsv @@ q.tsq
+                  ORDER BY rank DESC
+                     LIMIT %(limit)s
+                  ) lexrows
+            )
+            SELECT channel, uri FROM (
+                SELECT 'dense'::text AS channel, uri, rnk FROM dense
+                UNION ALL
+                SELECT 'lexical', uri, rnk FROM lexical
+            ) ranked
+            ORDER BY channel, rnk
+            """,
+            params,
+        )
+
+        dense: list[str] = []
+        lexical: list[str] = []
+        for channel, uri in cur.fetchall():
+            if channel == "dense":
+                dense.append(uri)
+            else:
+                lexical.append(uri)
+        return dedupe(dense), dedupe(lexical)
+
+    def _hydrate(self, uris: list[str], scores: dict[str, float]) -> list[RetrievedDoc]:
+        """Attach tenant, section, tier and title to the fused URIs."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """SELECT d.source_uri, t.slug, d.section, d.sensitivity, d.title
                  FROM documents d JOIN tenants t ON t.id = d.tenant_id
                 WHERE d.source_uri = ANY(%s)""",
             (uris,),
@@ -140,10 +166,12 @@ class HybridRetriever(_BaseDense):
         out: list[RetrievedDoc] = []
         for uri in uris:
             if uri in meta:
-                tenant, section, tier = meta[uri]
+                tenant, section, tier, title = meta[uri]
                 out.append(
-                    RetrievedDoc(uri=uri, tenant=tenant, section=section,
-                                 tier=tier, score=scores.get(uri, 0.0))
+                    RetrievedDoc(
+                        uri=uri, tenant=tenant, section=section,
+                        tier=tier, score=scores.get(uri, 0.0), title=title or "",
+                    )
                 )
         return out
 

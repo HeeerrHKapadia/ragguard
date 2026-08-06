@@ -52,6 +52,10 @@ class AuthzPreFilterRetriever:
     retrieve(), because the OpenFGA client is async and the retrieval
     interface is not. In a real service this is one call at request start,
     cached for the life of the request.
+
+    The allow-set is applied with ``JOIN unnest(...)`` rather than
+    ``= ANY(list)``. Large array binds force the planner into sequential
+    checks; a set join scales with the intersection instead.
     """
 
     name = "dense-authz"
@@ -59,14 +63,9 @@ class AuthzPreFilterRetriever:
     def __init__(self, conn: psycopg.Connection, allowed: dict[str, set[str]]) -> None:
         self.conn = conn
         self.allowed = allowed
-        self._cache: dict[str, Vector] = {}
 
     def _embed(self, text: str) -> Vector:
-        cached = self._cache.get(text)
-        if cached is None:
-            cached = Vector(embed_query(text))
-            self._cache[text] = cached
-        return cached
+        return Vector(embed_query(text))
 
     def retrieve(self, case: GoldenCase, principal: Principal, k: int) -> list[RetrievedDoc]:
         permitted = self.allowed.get(principal.email)
@@ -76,11 +75,13 @@ class AuthzPreFilterRetriever:
         cur = self.conn.cursor()
         cur.execute(
             """SELECT d.source_uri, t.slug, d.section, d.sensitivity,
-                      c.embedding <=> %(vec)s AS distance
+                      c.embedding <=> %(vec)s AS distance,
+                      d.title
                  FROM chunks c
                  JOIN documents d ON d.id = c.document_id
                  JOIN tenants   t ON t.id = d.tenant_id
-                WHERE d.source_uri = ANY(%(allowed)s)
+                 JOIN unnest(%(allowed)s::text[]) AS allowed(uri)
+                   ON allowed.uri = d.source_uri
              ORDER BY distance
                 LIMIT %(limit)s""",
             {
@@ -91,10 +92,12 @@ class AuthzPreFilterRetriever:
         )
 
         best: dict[str, RetrievedDoc] = {}
-        for uri, tenant, section, tier, distance in cur.fetchall():
+        for uri, tenant, section, tier, distance, title in cur.fetchall():
             if uri not in best:
-                best[uri] = RetrievedDoc(uri=uri, tenant=tenant, section=section,
-                                         tier=tier, score=float(distance))
+                best[uri] = RetrievedDoc(
+                    uri=uri, tenant=tenant, section=section,
+                    tier=tier, score=float(distance), title=title or "",
+                )
                 if len(best) >= k:
                     break
         return list(best.values())

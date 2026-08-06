@@ -23,6 +23,9 @@ class RetrievedDoc:
     section: str
     tier: str
     score: float = 0.0
+    # Optional display title folded into the retrieval SELECT so the API
+    # does not need a second round-trip to hydrate names.
+    title: str = ""
 
 
 @dataclass

@@ -96,7 +96,10 @@
         <label for="q">Question</label>
         <input id="q" value="compensation review and pay bands" autocomplete="off">
       </div>
-      <button id="go">Search</button>
+      <div style="display:flex; gap:8px;">
+        <button id="go">Search</button>
+        <button id="ask" title="Guarded, cited answer for this persona">Ask</button>
+      </div>
     </div>
     <div class="who" id="who"></div>
   </div>
@@ -104,6 +107,11 @@
   <div class="card">
     <div class="eyebrow" style="margin-bottom:10px">Results</div>
     <div id="results"><div class="empty">Run a search to begin.</div></div>
+  </div>
+
+  <div class="card">
+    <div class="eyebrow" style="margin-bottom:10px">Guarded answer</div>
+    <div id="answer"><div class="empty">Ask a question to get a cited answer.</div></div>
   </div>
 
   <div class="card">
@@ -187,6 +195,45 @@ function render(res) {
   ].join('');
 }
 
+async function ask() {
+  el('ask').disabled = true;
+  el('answer').innerHTML = '<div class="empty">Thinking…</div>';
+  try {
+    const res = await api('/api/answer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`},
+      body: JSON.stringify({query: el('q').value, k: 5})
+    });
+    renderAnswer(res);
+  } catch (e) {
+    el('answer').innerHTML = `<div class="empty">${e.detail || 'Answer failed.'}</div>`;
+  } finally {
+    el('ask').disabled = false;
+  }
+}
+
+function renderAnswer(res) {
+  const a = res.answer;
+  const claims = (a.claims || []).length
+    ? a.claims.map(c => `<div class="result" style="border:none;padding:6px 0">
+        <div>${escapeHtml(c.text)}${c.citation != null ? ` <span class="uri">[${c.citation}]</span>` : ''}</div>
+      </div>`).join('')
+    : '';
+  const cites = (a.citations || []).length
+    ? `<div class="neighbours" style="margin-top:8px">${a.citations.map(c => `
+        <div class="nb">
+          <span class="tier ${tierClass(c.tier)}">${c.tier}</span>
+          <span>[${c.marker}] ${escapeHtml(c.title || c.uri)}</span>
+          <span class="uri">${escapeHtml(c.uri)}</span>
+        </div>`).join('')}</div>`
+    : '';
+  el('answer').innerHTML = `
+    <div class="rmeta" style="margin-bottom:8px"><span>backend ${escapeHtml(res.backend)}</span></div>
+    ${a.preamble ? `<div style="margin-bottom:6px">${escapeHtml(a.preamble)}</div>` : ''}
+    ${claims}
+    ${cites}`;
+}
+
 async function expand(i, uri) {
   const box = el(`nb-${i}`);
   if (box.style.display === 'block') { box.style.display = 'none'; return; }
@@ -207,6 +254,7 @@ function escapeHtml(s) {
 
 el('persona').addEventListener('change', signIn);
 el('go').addEventListener('click', search);
+el('ask').addEventListener('click', ask);
 el('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
 loadPersonas();
 </script>
