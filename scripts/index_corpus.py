@@ -36,10 +36,13 @@ def main() -> int:
             cur = conn.cursor()
 
             cur.execute(
-                """SELECT d.source_uri, d.id, d.tenant_id
+                """SELECT d.source_uri, d.id, d.tenant_id, d.section, d.sensitivity
                      FROM documents d JOIN tenants t ON t.id = d.tenant_id"""
             )
-            doc_ids = {uri: (doc_id, tenant_id) for uri, doc_id, tenant_id in cur.fetchall()}
+            doc_ids = {
+                uri: (doc_id, tenant_id, section, sensitivity)
+                for uri, doc_id, tenant_id, section, sensitivity in cur.fetchall()
+            }
 
             if not doc_ids:
                 print("No documents found. Run: uv run python scripts/seed.py")
@@ -62,10 +65,12 @@ def main() -> int:
                     entry = doc_ids.get(doc.source_uri)
                     if entry is None:
                         continue
-                    doc_id, tenant_id = entry
+                    doc_id, tenant_id, section, sensitivity = entry
 
                     for chunk in chunk_text(doc.text):
-                        pending.append((doc_id, tenant_id, chunk.ordinal, chunk.text))
+                        pending.append(
+                            (doc_id, tenant_id, chunk.ordinal, chunk.text, section, sensitivity)
+                        )
 
                     if len(pending) >= BATCH:
                         tenant_chunks += flush(cur, pending)
@@ -106,17 +111,42 @@ def flush(cur: psycopg.Cursor, pending: list[tuple]) -> int:
     if not pending:
         return 0
 
-    vectors = embed_documents([text for _, _, _, text in pending])
+    vectors = embed_documents([text for _, _, _, text, _, _ in pending])
 
-    cur.executemany(
-        """INSERT INTO chunks
-             (document_id, tenant_id, ordinal, text, token_count, embedding)
-           VALUES (%s, %s, %s, %s, %s, %s)""",
-        [
-            (doc_id, tenant_id, ordinal, text, estimate_tokens(text), Vector(vec))
-            for (doc_id, tenant_id, ordinal, text), vec in zip(pending, vectors)
-        ],
+    # section/sensitivity are denormalized when 03_chunk_acl.sql has run.
+    # Fall back to the original insert shape on older volumes.
+    cur.execute(
+        """SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'chunks' AND column_name = 'section'"""
     )
+    has_acl = cur.fetchone() is not None
+
+    if has_acl:
+        cur.executemany(
+            """INSERT INTO chunks
+                 (document_id, tenant_id, ordinal, text, token_count,
+                  embedding, section, sensitivity)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+            [
+                (
+                    doc_id, tenant_id, ordinal, text,
+                    estimate_tokens(text), Vector(vec), section, sensitivity,
+                )
+                for (doc_id, tenant_id, ordinal, text, section, sensitivity), vec
+                in zip(pending, vectors)
+            ],
+        )
+    else:
+        cur.executemany(
+            """INSERT INTO chunks
+                 (document_id, tenant_id, ordinal, text, token_count, embedding)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            [
+                (doc_id, tenant_id, ordinal, text, estimate_tokens(text), Vector(vec))
+                for (doc_id, tenant_id, ordinal, text, _section, _sens), vec
+                in zip(pending, vectors)
+            ],
+        )
     return len(pending)
 
 

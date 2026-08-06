@@ -1,18 +1,15 @@
 """Split documents into chunks.
 
-Phase 1 uses fixed-size character windows with overlap, which is the naive
-strategy on purpose. It ignores everything a markdown document tells you
-about its own structure: headings, section boundaries, table rows, code
-fences. A chunk routinely begins mid-sentence under one heading and ends
-under another.
-
-That is the baseline being measured, not a recommendation. Phase 2 replaces
-it with structure-aware splitting and the eval reports what that was worth.
-Building the good version first would leave nothing to compare against.
+Fixed-size windows are the measured Phase 1 baseline. Structure-aware
+splitting is available via ``strategy="markdown"`` for the next re-index:
+it prefers heading boundaries so a chunk rarely begins under one section
+and ends under another, which cuts useless overlap and improves lexical
+density without changing the embedding model.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # ~4 characters per token is the usual English rule of thumb, so 1600
@@ -23,6 +20,8 @@ from dataclasses import dataclass
 CHUNK_CHARS = 1600
 OVERLAP_CHARS = 200
 
+_HEADING_RE = re.compile(r"(?m)^(#{1,6}\s+\S.*)$")
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -31,6 +30,23 @@ class Chunk:
 
 
 def chunk_text(
+    text: str,
+    chunk_chars: int = CHUNK_CHARS,
+    overlap_chars: int = OVERLAP_CHARS,
+    strategy: str = "fixed",
+) -> list[Chunk]:
+    """Split text into overlapping windows.
+
+    ``strategy="fixed"`` is the naive baseline (Phase 1).
+    ``strategy="markdown"`` packs heading-aware sections into windows first,
+    then falls back to fixed windows for oversized sections.
+    """
+    if strategy == "markdown":
+        return chunk_markdown(text, chunk_chars=chunk_chars, overlap_chars=overlap_chars)
+    return chunk_fixed(text, chunk_chars=chunk_chars, overlap_chars=overlap_chars)
+
+
+def chunk_fixed(
     text: str,
     chunk_chars: int = CHUNK_CHARS,
     overlap_chars: int = OVERLAP_CHARS,
@@ -63,6 +79,57 @@ def chunk_text(
         start += stride
 
     return chunks
+
+
+def chunk_markdown(
+    text: str,
+    chunk_chars: int = CHUNK_CHARS,
+    overlap_chars: int = OVERLAP_CHARS,
+) -> list[Chunk]:
+    """Heading-aware packing with fixed-window fallback for long sections."""
+    text = text.strip()
+    if not text:
+        return []
+
+    parts = _HEADING_RE.split(text)
+    sections: list[str] = []
+    buf = parts[0].strip() if parts else ""
+    i = 1
+    while i < len(parts):
+        heading = parts[i].strip()
+        body = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        section = f"{heading}\n\n{body}".strip() if body else heading
+        if buf:
+            sections.append(buf)
+            buf = ""
+        sections.append(section)
+        i += 2
+    if buf:
+        sections.append(buf)
+    if not sections:
+        return chunk_fixed(text, chunk_chars, overlap_chars)
+
+    packed: list[str] = []
+    current = ""
+    for section in sections:
+        if len(section) > chunk_chars:
+            if current:
+                packed.append(current)
+                current = ""
+            for piece in chunk_fixed(section, chunk_chars, overlap_chars):
+                packed.append(piece.text)
+            continue
+        candidate = f"{current}\n\n{section}".strip() if current else section
+        if len(candidate) <= chunk_chars:
+            current = candidate
+        else:
+            if current:
+                packed.append(current)
+            current = section
+    if current:
+        packed.append(current)
+
+    return [Chunk(ordinal=i, text=t) for i, t in enumerate(packed) if t]
 
 
 def estimate_tokens(text: str) -> int:
