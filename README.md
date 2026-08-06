@@ -58,6 +58,7 @@ looks fine until someone searches.
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Components, data flow, and the decisions behind them |
 | [WALKTHROUGH.md](docs/WALKTHROUGH.md) | What was measured, and the four predictions that were wrong |
 | [DEPLOY.md](docs/DEPLOY.md) | Deploying to Fly.io, and what to check when it misbehaves |
+| [IMPROVEMENT_PLAN.md](docs/IMPROVEMENT_PLAN.md) | Ranked roadmap to make the system faster and scale cleanly |
 
 ## Why this problem
 

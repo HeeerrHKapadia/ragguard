@@ -26,7 +26,8 @@ from ragguard.retrieval.filters import visibility_sql
 CHUNK_OVERSAMPLE = 6
 
 SELECT_COLS = """SELECT d.source_uri, t.slug, d.section, d.sensitivity,
-                        c.embedding <=> %(vec)s AS distance"""
+                        c.embedding <=> %(vec)s AS distance,
+                        d.title"""
 
 FROM_JOIN = """FROM chunks c
                JOIN documents d ON d.id = c.document_id
@@ -41,27 +42,22 @@ class _BaseDense:
     def __init__(self, conn: psycopg.Connection, oversample: int = CHUNK_OVERSAMPLE) -> None:
         self.conn = conn
         self.oversample = oversample
-        # Each query is asked by three or four personas, so without this the
-        # same text is embedded three or four times. 884 cases collapse to
-        # 220 distinct queries.
-        self._cache: dict[str, Vector] = {}
 
     def _embed(self, text: str) -> Vector:
-        cached = self._cache.get(text)
-        if cached is None:
-            cached = Vector(embed_query(text))
-            self._cache[text] = cached
-        return cached
+        # Process-wide cache lives in embedding.embed_query; Vector wrap is cheap.
+        return Vector(embed_query(text))
 
     @staticmethod
     def _collapse(rows, k: int) -> list[RetrievedDoc]:
         """Keep the best-scoring chunk per document, up to k documents."""
         best: dict[str, RetrievedDoc] = {}
-        for uri, tenant, section, tier, distance in rows:
+        for row in rows:
+            uri, tenant, section, tier, distance = row[:5]
+            title = row[5] if len(row) > 5 else ""
             if uri not in best:
                 best[uri] = RetrievedDoc(
                     uri=uri, tenant=tenant, section=section,
-                    tier=tier, score=float(distance),
+                    tier=tier, score=float(distance), title=title or "",
                 )
                 if len(best) >= k:
                     break

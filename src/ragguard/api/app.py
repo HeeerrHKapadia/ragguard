@@ -23,7 +23,7 @@ from ragguard.access import TIER_RANK, Principal, load_principals
 from ragguard.api.auth import current_identity, issue_token
 from ragguard.api.tracing import recent, span, trace
 from ragguard.config import PROJECT_ROOT, settings
-from ragguard.db import connect
+from ragguard.db import close_pool, get_pool
 from ragguard.eval.dataset import GoldenCase
 from ragguard.graph.filters import visibility_cypher, visibility_params
 from ragguard.graph.store import graph_driver
@@ -36,25 +36,14 @@ state: dict = {}
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Hold one connection and one driver for the process lifetime.
+    """Hold a connection pool and an optional graph driver for the process.
 
-    Reconnecting per request would dominate the latency the traces are
-    supposed to be measuring.
-
-    Both context managers are kept in variables that outlive this block.
-    `connect().__enter__()` looks equivalent and is not: the generator
-    context manager it returns would have no remaining reference, get
-    collected, run its own cleanup, and close the connection out from under
-    the server. Second time this exact shape has caused a bug in this
-    project, hence the comment.
+    A single shared connection serialized every search, health check and
+    hydrate query. The pool lets concurrent requests progress independently
+    without reconnecting on every call.
     """
-    conn_ctx = connect()
-    conn = conn_ctx.__enter__()
+    pool = get_pool()
 
-    # The graph is optional. Search — the thing the demo is actually about —
-    # needs only Postgres, so a deployment can run two services instead of
-    # three and the "connected to" expansion degrades to empty rather than
-    # taking the whole service down with it.
     driver_ctx = None
     driver = None
     try:
@@ -67,25 +56,26 @@ async def lifespan(_app: FastAPI):
         driver_ctx = None
         driver = None
 
-    cur = conn.cursor()
-    state["conn"] = conn
-    state["driver"] = driver
-    state["principals"] = load_principals(cur)
-    state["retriever"] = PreFilterRetriever(conn)
+    with pool.connection() as conn:
+        cur = conn.cursor()
+        state["principals"] = load_principals(cur)
+        cur.execute(
+            """SELECT u.email, u.display_name, u.title, t.slug
+                 FROM users u JOIN tenants t ON t.id = u.tenant_id
+             ORDER BY t.slug, u.email"""
+        )
+        directory = [
+            {"email": e, "name": n, "title": ti, "tenant": s}
+            for e, n, ti, s in cur.fetchall()
+        ]
 
-    cur.execute(
-        """SELECT u.email, u.display_name, u.title, t.slug
-             FROM users u JOIN tenants t ON t.id = u.tenant_id
-         ORDER BY t.slug, u.email"""
-    )
+    principals = state["principals"]
+    state["pool"] = pool
+    state["driver"] = driver
     # Ordered by privilege rather than alphabetically, so the dropdown reads
     # bottom to top and stepping through it tells the story: results appear
     # as clearance rises. Alphabetical put the new hire last, which buries
     # the comparison the demo exists to make.
-    directory = [
-        {"email": e, "name": n, "title": ti, "tenant": s} for e, n, ti, s in cur.fetchall()
-    ]
-    principals = state["principals"]
     state["directory"] = sorted(
         directory,
         key=lambda p: (
@@ -101,7 +91,7 @@ async def lifespan(_app: FastAPI):
     finally:
         if driver_ctx is not None:
             driver_ctx.__exit__(None, None, None)
-        conn_ctx.__exit__(None, None, None)
+        close_pool()
 
 
 app = FastAPI(title="ragguard", lifespan=lifespan)
@@ -144,18 +134,22 @@ def search(request: SearchRequest, email: str = Depends(current_identity)) -> di
             case_id="api", tenant=principal.tenant_slug, persona=email,
             query=request.query, query_class="local", relevant_uris=(),
         )
-        with span(record, "retrieve"):
-            found = state["retriever"].retrieve(case, principal, request.k)
+        with state["pool"].connection() as conn:
+            with span(record, "retrieve"):
+                found = PreFilterRetriever(conn).retrieve(case, principal, request.k)
 
-        with span(record, "hydrate"):
-            titles = {}
-            if found:
-                cur = state["conn"].cursor()
-                cur.execute(
-                    "SELECT source_uri, title FROM documents WHERE source_uri = ANY(%s)",
-                    ([d.uri for d in found],),
-                )
-                titles = dict(cur.fetchall())
+            # Titles are selected with the retrieval query. Fall back only
+            # for callers using an older retriever shape without titles.
+            missing = [d.uri for d in found if not d.title]
+            titles = {d.uri: d.title for d in found if d.title}
+            if missing:
+                with span(record, "hydrate"):
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT source_uri, title FROM documents WHERE source_uri = ANY(%s)",
+                        (missing,),
+                    )
+                    titles.update(dict(cur.fetchall()))
 
         record.results = len(found)
 
@@ -223,10 +217,11 @@ def traces() -> list[dict]:
 @app.get("/api/health")
 def health() -> dict:
     try:
-        cur = state["conn"].cursor()
-        cur.execute("SELECT count(*) FROM chunks")
-        chunks = cur.fetchone()[0]
-    except psycopg.Error:
+        with state["pool"].connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT count(*) FROM chunks")
+            chunks = cur.fetchone()[0]
+    except (psycopg.Error, KeyError):
         raise HTTPException(status_code=503, detail="Search is unavailable.") from None
     return {"status": "ok", "chunks": chunks, "model": settings.embedding_model}
 

@@ -16,15 +16,37 @@ from __future__ import annotations
 
 from ragguard.access import TIER_RANK, Principal
 
+
 # Inlined rather than defined as a database function so the policy can change
 # without a schema migration — and, at this stage, without re-embedding 4996
 # chunks to rebuild the volume.
-TIER_CASE = """CASE d.sensitivity
+def _tier_case(column: str) -> str:
+    return f"""CASE {column}
                  WHEN 'public'       THEN 0
                  WHEN 'internal'     THEN 1
                  WHEN 'confidential' THEN 2
                  WHEN 'restricted'   THEN 3
                END"""
+
+
+TIER_CASE = _tier_case("d.sensitivity")
+CHUNK_TIER_CASE = _tier_case("c.sensitivity")
+
+
+def _visibility_params(principal: Principal) -> dict:
+    sections: list[str] = []
+    ranks: list[int] = []
+    for grant in principal.grants:
+        granted = TIER_RANK[grant.clearance] + 1
+        for section in grant.elevated_sections:
+            sections.append(section)
+            ranks.append(granted)
+    return {
+        "tenant": principal.tenant_slug,
+        "clearance": TIER_RANK[principal.max_clearance],
+        "elev_sections": sections,
+        "elev_ranks": ranks,
+    }
 
 
 def visibility_sql(principal: Principal) -> tuple[str, dict]:
@@ -43,14 +65,6 @@ def visibility_sql(principal: Principal) -> tuple[str, dict]:
     section — which is what "finance reads confidential finance material"
     means, as opposed to "finance reads confidential anything".
     """
-    sections: list[str] = []
-    ranks: list[int] = []
-    for grant in principal.grants:
-        granted = TIER_RANK[grant.clearance] + 1
-        for section in grant.elevated_sections:
-            sections.append(section)
-            ranks.append(granted)
-
     sql = f"""
         t.slug = %(tenant)s
         AND (
@@ -69,11 +83,33 @@ def visibility_sql(principal: Principal) -> tuple[str, dict]:
             )
         )
     """
+    return sql, _visibility_params(principal)
 
-    params = {
-        "tenant": principal.tenant_slug,
-        "clearance": TIER_RANK[principal.max_clearance],
-        "elev_sections": sections,
-        "elev_ranks": ranks,
-    }
-    return sql, params
+
+def visibility_sql_on_chunks(principal: Principal) -> tuple[str, dict]:
+    """Same policy, evaluated on denormalized chunk ACL columns.
+
+    Assumes `c` is chunks and `t` is tenants (for slug). Requires
+    ``db/init/03_chunk_acl.sql`` to have populated ``c.section`` and
+    ``c.sensitivity``. Prefer this once Phase B is applied so ANN/FTS
+    scans do not join documents just to decide visibility.
+    """
+    sql = f"""
+        t.slug = %(tenant)s
+        AND (
+            {CHUNK_TIER_CASE} <= %(clearance)s
+            OR EXISTS (
+                SELECT 1
+                  FROM unnest(
+                         %(elev_sections)s::text[],
+                         %(elev_ranks)s::int[]
+                       ) AS e(sec, rnk)
+                 WHERE (
+                         c.section = e.sec
+                         OR left(c.section, length(e.sec) + 1) = e.sec || '/'
+                       )
+                   AND e.rnk >= {CHUNK_TIER_CASE}
+            )
+        )
+    """
+    return sql, _visibility_params(principal)
